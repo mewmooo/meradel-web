@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Memastikan seluruh aset pixel art tetap tajam (crisp) */
+svg {
+  image-rendering: pixelated;
+}
