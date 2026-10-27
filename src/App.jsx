@@ -823,6 +823,17 @@ export default function App() {
     };
   }, [loadSupabaseData, showToast]);
 
+  // Auto-sync berkala antar akun pasangan (polling setiap 7 detik jika sedang terhubung dunia)
+  useEffect(() => {
+    if (!supabase || !currentUserId || !currentCouple) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadSupabaseData(currentUserId);
+      }
+    }, 7000);
+    return () => clearInterval(interval);
+  }, [currentUserId, currentCouple, loadSupabaseData]);
+
   // ============================================================================
   // 7. BACKEND / RLS AUTHORIZATION LAYER
   // ============================================================================
@@ -1751,7 +1762,7 @@ export default function App() {
       .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
   }, [db.mood_entries, partnerProfile, partnerCycleConsent]);
 
-  const handleAddCycleLog = (e) => {
+  const handleAddCycleLog = async (e) => {
     e.preventDefault();
     if (!currentUserId || currentUser?.gender !== 'female') return;
     if (!cycleStartInput) {
@@ -1765,6 +1776,32 @@ export default function App() {
     if (myCycleLogs.some((l) => l.start_date === cycleStartInput)) {
       showToast('Catatan siklus dengan tanggal mulai tersebut sudah ada.', 'error');
       return;
+    }
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('cycle_logs')
+          .insert({
+            user_id: currentUserId,
+            start_date: cycleStartInput,
+            end_date: cycleEndInput || null,
+          })
+          .select()
+          .single();
+        if (error) throw error;
+        setDb((prev) => ({
+          ...prev,
+          cycle_logs: [data, ...prev.cycle_logs],
+        }));
+        setCycleEndInput('');
+        showToast('Catatan siklus berhasil disimpan ke Cloud.', 'success');
+        return;
+      } catch (err) {
+        console.error('Gagal simpan cycle log:', err);
+        showToast(err.message || 'Gagal menyimpan catatan siklus ke Supabase.', 'error');
+        return;
+      }
     }
 
     const newLog = {
@@ -1784,7 +1821,14 @@ export default function App() {
     showToast('Catatan siklus berhasil disimpan.', 'success');
   };
 
-  const handleDeleteCycleLog = (id) => {
+  const handleDeleteCycleLog = async (id) => {
+    if (supabase) {
+      try {
+        await supabase.from('cycle_logs').delete().eq('id', id);
+      } catch (err) {
+        console.warn('Gagal hapus cycle log di Supabase:', err);
+      }
+    }
     setDb((prev) => ({
       ...prev,
       cycle_logs: prev.cycle_logs.filter((l) => !(l.id === id && l.user_id === currentUserId)),
@@ -1792,10 +1836,42 @@ export default function App() {
     showToast('Catatan siklus dihapus.', 'info');
   };
 
-  const handleSaveMoodEntry = (e) => {
+  const handleSaveMoodEntry = async (e) => {
     e.preventDefault();
     if (!currentUserId) return;
     const nowIso = new Date().toISOString();
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('mood_entries')
+          .insert({
+            user_id: currentUserId,
+            entry_date: moodDateInput,
+            mood: selectedMood,
+            energy: selectedEnergy,
+            symptoms: selectedSymptoms,
+            note: moodNoteInput.trim() || null,
+          })
+          .select()
+          .single();
+        if (error) throw error;
+        setDb((prev) => ({
+          ...prev,
+          mood_entries: [
+            data,
+            ...prev.mood_entries.filter((m) => !(m.user_id === currentUserId && m.entry_date === moodDateInput)),
+          ],
+        }));
+        setMoodNoteInput('');
+        showToast('Check-in kondisi harian tersimpan di Cloud.', 'success');
+        return;
+      } catch (err) {
+        console.error('Gagal simpan mood:', err);
+        showToast(err.message || 'Gagal menyimpan check-in mood ke Supabase.', 'error');
+        return;
+      }
+    }
 
     setDb((prev) => {
       const existing = prev.mood_entries.find(
@@ -1839,41 +1915,40 @@ export default function App() {
     showToast('Check-in kondisi harian tersimpan.', 'success');
   };
 
-  const handleToggleConsent = (field) => {
+  const handleToggleConsent = async (field) => {
     if (!currentUserId || !currentCouple) return;
-    setDb((prev) => {
-      const exists = prev.cycle_sharing_settings.find(
-        (s) => s.user_id === currentUserId && s.couple_id === currentCouple.id
-      );
-      if (exists) {
-        return {
-          ...prev,
-          cycle_sharing_settings: prev.cycle_sharing_settings.map((s) =>
-            s.user_id === currentUserId && s.couple_id === currentCouple.id
-              ? { ...s, [field]: !s[field], updated_at: new Date().toISOString() }
-              : s
-          ),
-        };
+    const exists = db.cycle_sharing_settings.find(
+      (s) => s.user_id === currentUserId && s.couple_id === currentCouple.id
+    );
+    const updatedVal = exists ? !exists[field] : true;
+    const payload = {
+      user_id: currentUserId,
+      couple_id: currentCouple.id,
+      share_cycle: field === 'share_cycle' ? updatedVal : (exists?.share_cycle || false),
+      share_mood: field === 'share_mood' ? updatedVal : (exists?.share_mood || false),
+      share_mood_note: field === 'share_mood_note' ? updatedVal : (exists?.share_mood_note || false),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (supabase) {
+      try {
+        await supabase.from('cycle_sharing_settings').upsert(payload);
+      } catch (err) {
+        console.warn('Gagal simpan consent di Supabase:', err);
       }
-      return {
-        ...prev,
-        cycle_sharing_settings: [
-          ...prev.cycle_sharing_settings,
-          {
-            user_id: currentUserId,
-            couple_id: currentCouple.id,
-            share_cycle: field === 'share_cycle',
-            share_mood: field === 'share_mood',
-            share_mood_note: field === 'share_mood_note',
-            updated_at: new Date().toISOString(),
-          },
-        ],
-      };
-    });
+    }
+
+    setDb((prev) => ({
+      ...prev,
+      cycle_sharing_settings: [
+        payload,
+        ...prev.cycle_sharing_settings.filter((s) => !(s.user_id === currentUserId && s.couple_id === currentCouple.id)),
+      ],
+    }));
     showToast('Pengaturan izin berbagi diperbarui.', 'info');
   };
 
-  const handleAddWishlist = (e) => {
+  const handleAddWishlist = async (e) => {
     e.preventDefault();
     if (!currentUserId || !currentCouple) return;
     const title = wishTitle.trim();
@@ -1886,6 +1961,42 @@ export default function App() {
     if (!urlCheck.valid) {
       showToast(urlCheck.error || 'URL tidak aman.', 'error');
       return;
+    }
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('wishlist_items')
+          .insert({
+            couple_id: currentCouple.id,
+            created_by: currentUserId,
+            title,
+            description: wishDesc.trim() || null,
+            url: wishUrl.trim() || null,
+            category: wishCategory,
+            priority: wishPriority,
+            status: 'saved',
+          })
+          .select()
+          .single();
+        if (error) throw error;
+
+        setDb((prev) => ({
+          ...prev,
+          wishlist_items: [data, ...prev.wishlist_items],
+        }));
+
+        setWishTitle('');
+        setWishDesc('');
+        setWishUrl('');
+        setShowWishModal(false);
+        showToast('Wishlist baru berhasil disimpan ke Cloud!', 'success');
+        return;
+      } catch (err) {
+        console.error('Gagal buat wishlist di Supabase:', err);
+        showToast(err.message || 'Gagal menyimpan wishlist ke Supabase.', 'error');
+        return;
+      }
     }
 
     const newItem = {
@@ -1914,7 +2025,18 @@ export default function App() {
     showToast('Wishlist baru berhasil ditambahkan!', 'success');
   };
 
-  const handleUpdateWishStatus = (item, status) => {
+  const handleUpdateWishStatus = async (item, status) => {
+    if (supabase) {
+      try {
+        await supabase
+          .from('wishlist_items')
+          .update({ status, updated_at: new Date().toISOString() })
+          .eq('id', item.id);
+      } catch (err) {
+        console.warn('Gagal update status wishlist di Supabase:', err);
+      }
+    }
+
     setDb((prev) => ({
       ...prev,
       wishlist_items: prev.wishlist_items.map((w) =>
@@ -1999,13 +2121,56 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const handleAddMemory = (e) => {
+  const handleAddMemory = async (e) => {
     e.preventDefault();
     if (!currentUserId || !currentCouple) return;
     const title = memTitle.trim();
     if (!title) {
       showToast('Judul kenangan wajib diisi.', 'error');
       return;
+    }
+
+    const memDateVal = memDate || todayLocalISO();
+    const captionVal = memCaption.trim() || null;
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('memories')
+          .insert({
+            couple_id: currentCouple.id,
+            created_by: currentUserId,
+            title,
+            caption: captionVal,
+            memory_date: memDateVal,
+            visibility: memVisibility,
+          })
+          .select()
+          .single();
+        if (error) throw error;
+
+        setDb((prev) => ({
+          ...prev,
+          memories: [data, ...prev.memories],
+        }));
+
+        const gotReward = awardGardenPointsIdempotent('memory_created', data.id, 10, `mem_reward:${data.id}`);
+        setMemTitle('');
+        setMemCaption('');
+        setMemImagePreview(null);
+        setShowMemModal(false);
+        showToast(
+          gotReward
+            ? 'Kenangan berhasil disimpan ke Cloud! +10 Poin Kasih untuk kalian.'
+            : 'Kenangan berhasil disimpan ke Cloud.',
+          'success'
+        );
+        return;
+      } catch (err) {
+        console.error('Gagal simpan memory di Supabase:', err);
+        showToast(err.message || 'Gagal menyimpan kenangan ke Supabase.', 'error');
+        return;
+      }
     }
 
     const memId = `mem_${Date.now()}`;
@@ -2018,8 +2183,8 @@ export default function App() {
       couple_id: currentCouple.id,
       created_by: currentUserId,
       title,
-      caption: memCaption.trim() || null,
-      memory_date: memDate || todayLocalISO(),
+      caption: captionVal,
+      memory_date: memDateVal,
       media_path: randomObjectPath,
       media_data_url: memImagePreview,
       visibility: memVisibility,
@@ -2045,7 +2210,7 @@ export default function App() {
     );
   };
 
-  const handleSendLoveNote = (e) => {
+  const handleSendLoveNote = async (e) => {
     e.preventDefault();
     if (!currentUserId || !currentCouple || !partnerProfile) {
       showToast('Pastikan pasanganmu sudah terhubung ke dunia ini.', 'error');
@@ -2068,6 +2233,49 @@ export default function App() {
       openAtIso = parsed.toISOString();
     }
 
+    const noteStatus = openAtIso && openAtIso > new Date().toISOString() ? 'scheduled' : 'sent';
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('love_notes')
+          .insert({
+            couple_id: currentCouple.id,
+            sender_id: currentUserId,
+            recipient_id: partnerProfile.id,
+            title,
+            body,
+            status: noteStatus,
+            open_at: openAtIso,
+          })
+          .select()
+          .single();
+        if (error) throw error;
+
+        setDb((prev) => ({
+          ...prev,
+          love_notes: [data, ...prev.love_notes],
+        }));
+
+        awardGardenPointsIdempotent('love_note_sent', data.id, 10, `note_reward:${data.id}`);
+        setNoteTitle('');
+        setNoteBody('');
+        setNoteScheduleDate('');
+        setNoteTab('sent');
+        showToast(
+          openAtIso
+            ? 'Surat terjadwal berhasil dikirim ke Cloud! Pasanganmu baru bisa membukanya saat waktunya tiba.'
+            : 'Surat cinta berhasil dikirim ke kotak masuk pasanganmu di Cloud!',
+          'success'
+        );
+        return;
+      } catch (err) {
+        console.error('Gagal kirim surat ke Supabase:', err);
+        showToast(err.message || 'Gagal mengirim surat ke Supabase.', 'error');
+        return;
+      }
+    }
+
     const noteId = `note_${Date.now()}`;
     const newNote = {
       id: noteId,
@@ -2076,7 +2284,7 @@ export default function App() {
       recipient_id: partnerProfile.id,
       title,
       body,
-      status: openAtIso && openAtIso > new Date().toISOString() ? 'scheduled' : 'sent',
+      status: noteStatus,
       open_at: openAtIso,
       opened_at: null,
       created_at: new Date().toISOString(),
@@ -2101,7 +2309,7 @@ export default function App() {
     );
   };
 
-  const handleOpenLoveNote = (note) => {
+  const handleOpenLoveNote = async (note) => {
     const nowIso = new Date().toISOString();
     if (note.recipient_id === currentUserId && note.open_at && note.open_at > nowIso) {
       showToast(
@@ -2112,6 +2320,17 @@ export default function App() {
     }
 
     if (note.recipient_id === currentUserId && !note.opened_at) {
+      if (supabase) {
+        try {
+          await supabase
+            .from('love_notes')
+            .update({ status: 'opened', opened_at: nowIso, updated_at: nowIso })
+            .eq('id', note.id);
+        } catch (err) {
+          console.warn('Gagal update status surat di Supabase:', err);
+        }
+      }
+
       setDb((prev) => ({
         ...prev,
         love_notes: prev.love_notes.map((n) =>
@@ -4056,7 +4275,14 @@ export default function App() {
                           setConfirmDialog({
                             title: 'Hapus Wishlist?',
                             message: `Apakah kamu yakin ingin menghapus "${item.title}" dari daftar keinginan?`,
-                            onConfirm: () => {
+                            onConfirm: async () => {
+                              if (supabase) {
+                                try {
+                                  await supabase.from('wishlist_items').delete().eq('id', item.id);
+                                } catch (err) {
+                                  console.warn('Gagal hapus wishlist di Supabase:', err);
+                                }
+                              }
                               setDb((prev) => ({
                                 ...prev,
                                 wishlist_items: prev.wishlist_items.filter((w) => w.id !== item.id),
@@ -4258,7 +4484,14 @@ export default function App() {
                             setConfirmDialog({
                               title: 'Hapus Kenangan?',
                               message: `Hapus kenangan "${mem.title}"?`,
-                              onConfirm: () => {
+                              onConfirm: async () => {
+                                if (supabase) {
+                                  try {
+                                    await supabase.from('memories').delete().eq('id', mem.id);
+                                  } catch (err) {
+                                    console.warn('Gagal hapus memory di Supabase:', err);
+                                  }
+                                }
                                 setDb((prev) => ({
                                   ...prev,
                                   memories: prev.memories.filter((m) => m.id !== mem.id),
