@@ -1446,9 +1446,20 @@ export default function App() {
           expires_at: expiresAt,
         });
 
+        const initialTiles = Array.from({ length: 25 }, (_, i) => {
+          if (i === 2) return { index: i, item: 'fireplace', stage: 2, last_watered_at: todayLocalISO(), planted_by: currentUserId };
+          if (i === 12) return { index: i, item: 'rug', stage: 2, last_watered_at: todayLocalISO(), planted_by: currentUserId };
+          if (i === 11) return { index: i, item: 'cat_mochi', stage: 2, last_watered_at: todayLocalISO(), planted_by: currentUserId };
+          return { index: i, item: 'empty', stage: 1, last_watered_at: null, planted_by: null };
+        });
+
         await supabase.from('garden_state').insert({
           couple_id: couple.id,
           points: 30,
+          garden_json: {
+            unlocked_items: ['cat_mochi', 'bunny_bubu', 'fireplace', 'rug'],
+            tiles: initialTiles,
+          },
         });
 
         await supabase.from('cycle_sharing_settings').upsert({
@@ -2112,10 +2123,47 @@ export default function App() {
   };
 
   // --- Sanctuary & Pet Care Handlers ---
+  const normalizeGardenState = useCallback((rawGarden, coupleId, userId) => {
+    const defaultTiles = Array.from({ length: 25 }, (_, i) => {
+      if (i === 2) return { index: i, item: 'fireplace', stage: 2, last_watered_at: todayLocalISO(), planted_by: userId };
+      if (i === 12) return { index: i, item: 'rug', stage: 2, last_watered_at: todayLocalISO(), planted_by: userId };
+      if (i === 11) return { index: i, item: 'cat_mochi', stage: 2, last_watered_at: todayLocalISO(), planted_by: userId };
+      return { index: i, item: 'empty', stage: 1, last_watered_at: null, planted_by: null };
+    });
+
+    if (!rawGarden) {
+      return {
+        couple_id: coupleId,
+        points: 30,
+        unlocked_items: ['cat_mochi', 'bunny_bubu', 'fireplace', 'rug'],
+        tiles: defaultTiles,
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    const json = rawGarden.garden_json && typeof rawGarden.garden_json === 'object' ? rawGarden.garden_json : {};
+    return {
+      couple_id: rawGarden.couple_id || coupleId,
+      points: typeof rawGarden.points === 'number' ? rawGarden.points : 30,
+      unlocked_items: Array.isArray(rawGarden.unlocked_items) && rawGarden.unlocked_items.length > 0
+        ? rawGarden.unlocked_items
+        : Array.isArray(json.unlocked_items) && json.unlocked_items.length > 0
+        ? json.unlocked_items
+        : ['cat_mochi', 'bunny_bubu', 'fireplace', 'rug'],
+      tiles: Array.isArray(rawGarden.tiles) && rawGarden.tiles.length === 25
+        ? rawGarden.tiles
+        : Array.isArray(json.tiles) && json.tiles.length === 25
+        ? json.tiles
+        : defaultTiles,
+      updated_at: rawGarden.updated_at || new Date().toISOString(),
+    };
+  }, []);
+
   const currentGarden = useMemo(() => {
     if (!currentCouple) return null;
-    return db.garden_state.find((g) => g.couple_id === currentCouple.id) || null;
-  }, [db.garden_state, currentCouple]);
+    const raw = db.garden_state.find((g) => g.couple_id === currentCouple.id) || null;
+    return normalizeGardenState(raw, currentCouple.id, currentUserId);
+  }, [db.garden_state, currentCouple, currentUserId, normalizeGardenState]);
 
   const handleUnlockGardenItem = (itemType, cost) => {
     if (!currentCouple || !currentGarden) return;
@@ -3359,7 +3407,7 @@ export default function App() {
                 className="cursor-pointer border-2 border-[#4A3525] bg-[#E8D3B9] p-3 shadow-[2px_2px_0px_0px_#2C1E14]"
               >
                 <div className="grid grid-cols-5 gap-1.5 max-w-[260px] mx-auto">
-                  {currentGarden.tiles.map((tile) => (
+                  {currentGarden?.tiles?.map((tile) => (
                     <div
                       key={tile.index}
                       className="aspect-square bg-[#F5E6D3] border border-[#C2A382] flex items-center justify-center hover:bg-[#FDF8EE]"
@@ -4639,7 +4687,7 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-5 gap-2 max-w-[390px] mx-auto">
-                  {currentGarden.tiles.map((tile) => {
+                  {currentGarden?.tiles?.map((tile) => {
                     const isSelected = inspectedTileIndex === tile.index;
                     return (
                       <button
