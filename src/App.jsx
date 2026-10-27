@@ -1441,7 +1441,7 @@ export default function App() {
 
         await supabase.from('couple_invites').insert({
           couple_id: couple.id,
-          token_hash: tokenHash,
+          token_hash: rawCode.trim().toUpperCase(),
           created_by: currentUserId,
           expires_at: expiresAt,
         });
@@ -1546,7 +1546,7 @@ export default function App() {
       try {
         const { error } = await supabase.from('couple_invites').insert({
           couple_id: currentCouple.id,
-          token_hash: tokenHash,
+          token_hash: rawCode.trim().toUpperCase(),
           created_by: currentUserId,
           expires_at: expiresAt,
         });
