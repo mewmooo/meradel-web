@@ -37,6 +37,7 @@ import {
   EyeOff,
   Copy
 } from 'lucide-react';
+import { supabase } from './lib/supabaseClient';
 
 // ============================================================================
 // 1. KONSTANTA & DATA REFERENSI (DESAIN PIXEL ART 16-BIT COZY)
@@ -675,6 +676,45 @@ export default function App() {
   // --- Custom Confirmation Modal State (Tanpa window.confirm) ---
   const [confirmDialog, setConfirmDialog] = useState(null);
 
+  // --- Listener Pemulihan Kata Sandi dari Email (Supabase Recovery & URL Hash) ---
+  useEffect(() => {
+    const checkRecoveryUrl = () => {
+      const hash = window.location.hash;
+      const search = window.location.search;
+      if (
+        hash.includes('type=recovery') ||
+        search.includes('type=recovery') ||
+        hash.includes('access_token=')
+      ) {
+        setAuthView('reset_password');
+        showToast('Sesi pemulihan akun terverifikasi. Silakan masukkan kata sandi barumu.', 'info');
+      }
+    };
+
+    checkRecoveryUrl();
+    window.addEventListener('hashchange', checkRecoveryUrl);
+
+    if (supabase) {
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange(async (event) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setAuthView('reset_password');
+          showToast('Sesi pemulihan akun aktif dari email. Silakan atur kata sandi baru kamu.', 'info');
+        }
+      });
+
+      return () => {
+        window.removeEventListener('hashchange', checkRecoveryUrl);
+        subscription?.unsubscribe();
+      };
+    }
+
+    return () => {
+      window.removeEventListener('hashchange', checkRecoveryUrl);
+    };
+  }, [showToast]);
+
   // ============================================================================
   // 7. BACKEND / RLS AUTHORIZATION LAYER
   // ============================================================================
@@ -881,6 +921,12 @@ export default function App() {
 
   const [forgotEmail, setForgotEmail] = useState('');
   const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [isSendingResetEmail, setIsSendingResetEmail] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
 
   const [newWorldName, setNewWorldName] = useState('');
   const [generatedRawToken, setGeneratedRawToken] = useState(null);
@@ -1004,30 +1050,95 @@ export default function App() {
     showToast(`Akun ${name} berhasil dibuat! Sekarang buat atau gabung dunia pasanganmu.`, 'success');
   };
 
-  const handleResetPasswordSubmit = (e) => {
+  // 1. Minta pengiriman tautan reset ke email (Aman - tidak mengubah sandi langsung)
+  const handleRequestPasswordReset = async (e) => {
     e.preventDefault();
     const email = forgotEmail.trim().toLowerCase();
-    const found = db.profiles.find((p) => p.email.toLowerCase() === email);
-    if (!found) {
-      showToast('Email tidak ditemukan.', 'error');
+    if (!email || !email.includes('@')) {
+      showToast('Masukkan alamat email yang valid.', 'error');
       return;
     }
+
+    setIsSendingResetEmail(true);
+    try {
+      if (supabase) {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/#type=recovery`,
+        });
+        if (error) {
+          showToast(error.message || 'Gagal mengirim email pemulihan.', 'error');
+          return;
+        }
+        setForgotSent(true);
+        showToast(`Tautan reset kata sandi telah dikirim ke ${email}. Silakan cek kotak masuk/spam emailmu!`, 'success');
+      } else {
+        // Fallback untuk database demo / offline
+        const found = db.profiles.find((p) => p.email.toLowerCase() === email);
+        if (!found) {
+          showToast('Akun dengan email tersebut belum terdaftar.', 'error');
+          return;
+        }
+        setForgotSent(true);
+        showToast(`Tautan pemulihan kata sandi telah disiapkan untuk ${email}.`, 'success');
+      }
+    } catch {
+      showToast('Terjadi kesalahan saat memproses permintaan reset kata sandi.', 'error');
+    } finally {
+      setIsSendingResetEmail(false);
+    }
+  };
+
+  // 2. Simpan kata sandi baru (Hanya dapat diakses setelah membuka tautan recovery)
+  const handleConfirmNewPassword = async (e) => {
+    e.preventDefault();
     if (resetNewPassword.length < 6) {
       showToast('Kata sandi baru minimal 6 karakter.', 'error');
       return;
     }
-    setDb((prev) => ({
-      ...prev,
-      profiles: prev.profiles.map((p) =>
-        p.id === found.id
-          ? { ...p, password_hash: hashText(resetNewPassword), updated_at: new Date().toISOString() }
-          : p
-      ),
-    }));
-    setAuthView('login');
-    setLoginEmail(email);
-    setResetNewPassword('');
-    showToast('Kata sandi berhasil diperbarui! Silakan masuk.', 'success');
+    if (resetNewPassword !== resetConfirmPassword) {
+      showToast('Konfirmasi kata sandi tidak cocok. Harap periksa kembali.', 'error');
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    try {
+      if (supabase) {
+        const { error } = await supabase.auth.updateUser({
+          password: resetNewPassword,
+        });
+        if (error) {
+          showToast(error.message || 'Gagal memperbarui kata sandi di Supabase.', 'error');
+          return;
+        }
+      }
+
+      // Sinkronkan ke database lokal
+      const targetEmail = forgotEmail.trim().toLowerCase();
+      if (targetEmail) {
+        setDb((prev) => ({
+          ...prev,
+          profiles: prev.profiles.map((p) =>
+            p.email.toLowerCase() === targetEmail
+              ? { ...p, password_hash: hashText(resetNewPassword), updated_at: new Date().toISOString() }
+              : p
+          ),
+        }));
+        setLoginEmail(targetEmail);
+      }
+
+      showToast('Kata sandi berhasil diperbarui! Silakan masuk dengan kata sandi barumu.', 'success');
+      setResetNewPassword('');
+      setResetConfirmPassword('');
+      setForgotSent(false);
+      setAuthView('login');
+      if (window.location.hash.includes('recovery')) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    } catch {
+      showToast('Gagal menyimpan kata sandi baru.', 'error');
+    } finally {
+      setIsUpdatingPassword(false);
+    }
   };
 
   const handleLogout = () => {
@@ -2082,26 +2193,47 @@ export default function App() {
               </p>
             </div>
 
-            <div className="flex border-b-2 border-[#4A3525] mb-5">
-              <button
-                type="button"
-                onClick={() => setAuthView('login')}
-                className={`flex-1 py-2.5 text-xs font-bold uppercase tracking-wider transition ${
-                  authView === 'login' ? 'bg-[#6B8E78] text-[#FDF8EE]' : 'bg-[#EFE2C6] text-[#4A3525]'
-                }`}
-              >
-                Masuk Akun
-              </button>
-              <button
-                type="button"
-                onClick={() => setAuthView('register')}
-                className={`flex-1 py-2.5 text-xs font-bold uppercase tracking-wider transition ${
-                  authView === 'register' ? 'bg-[#6B8E78] text-[#FDF8EE]' : 'bg-[#EFE2C6] text-[#4A3525]'
-                }`}
-              >
-                Daftar Baru
-              </button>
-            </div>
+            {/* Header Tab Navigasi Autentikasi */}
+            {authView === 'login' || authView === 'register' ? (
+              <div className="flex border-b-2 border-[#4A3525] mb-5">
+                <button
+                  type="button"
+                  onClick={() => setAuthView('login')}
+                  className={`flex-1 py-2.5 text-xs font-bold uppercase tracking-wider transition ${
+                    authView === 'login' ? 'bg-[#6B8E78] text-[#FDF8EE]' : 'bg-[#EFE2C6] text-[#4A3525]'
+                  }`}
+                >
+                  Masuk Akun
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuthView('register')}
+                  className={`flex-1 py-2.5 text-xs font-bold uppercase tracking-wider transition ${
+                    authView === 'register' ? 'bg-[#6B8E78] text-[#FDF8EE]' : 'bg-[#EFE2C6] text-[#4A3525]'
+                  }`}
+                >
+                  Daftar Baru
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between border-b-2 border-[#4A3525] pb-3 mb-5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthView('login');
+                    setForgotSent(false);
+                  }}
+                  className="flex items-center gap-1 text-xs font-bold text-[#4A3525] hover:text-[#6B8E78] transition"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Kembali ke Masuk
+                </button>
+                <span className="text-xs font-bold uppercase tracking-wider text-[#8C4F5E] flex items-center gap-1.5">
+                  <KeyRound className="w-4 h-4" />
+                  {authView === 'reset_password' ? 'Sandi Baru' : 'Pemulihan Akun'}
+                </span>
+              </div>
+            )}
 
             {authView === 'login' && (
               <form onSubmit={handleLoginSubmit} className="space-y-4">
@@ -2266,40 +2398,215 @@ export default function App() {
               </form>
             )}
 
+            {/* Form Permintaan Reset Kata Sandi (Kirim Tautan ke Email) */}
             {authView === 'forgot' && (
-              <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
-                <p className="text-xs text-[#6E5039]">
-                  Masukkan alamat email akunmu dan kata sandi baru yang ingin kamu gunakan.
-                </p>
-                <div>
-                  <label className="block text-xs font-bold uppercase mb-1">Email Terdaftar</label>
-                  <input
-                    type="email"
-                    required
-                    value={forgotEmail}
-                    onChange={(e) => setForgotEmail(e.target.value)}
-                    placeholder="nama@email.com"
-                    className="w-full px-3 py-2 bg-white border-2 border-[#4A3525] text-sm"
-                  />
+              !forgotSent ? (
+                <form onSubmit={handleRequestPasswordReset} className="space-y-4">
+                  <div className="p-3 bg-[#FDF8EE] border-2 border-[#4A3525] text-xs text-[#4A3525] space-y-1">
+                    <p className="font-bold flex items-center gap-1.5 text-[#8C4F5E]">
+                      <Mail className="w-4 h-4" />
+                      Lupa Kata Sandi Akunmu?
+                    </p>
+                    <p className="text-[#6E5039] leading-relaxed">
+                      Masukkan alamat email terdaftarmu. Kami akan mengirimkan <strong>tautan pemulihan aman</strong> ke email kamu untuk memverifikasi kepemilikan akun sebelum kata sandi dapat diubah.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-[#4A3525] mb-1">
+                      Email Terdaftar
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      placeholder="nama@email.com"
+                      className="w-full px-3 py-2.5 bg-white border-2 border-[#4A3525] text-sm focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <PixelButton
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setAuthView('login')}
+                      className="flex-1"
+                    >
+                      Batal
+                    </PixelButton>
+                    <PixelButton
+                      type="submit"
+                      variant="primary"
+                      disabled={isSendingResetEmail}
+                      className="flex-1"
+                    >
+                      {isSendingResetEmail ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Mengirim...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mail className="w-4 h-4" />
+                          <span>Kirim Tautan Reset</span>
+                        </>
+                      )}
+                    </PixelButton>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  <div className="p-4 bg-[#D8E6DC] border-2 border-[#4E6E5B] text-xs text-[#2C4235] space-y-2">
+                    <div className="flex items-center gap-2 text-sm font-bold text-[#2C4235]">
+                      <CheckCircle2 className="w-5 h-5 text-[#4E6E5B] shrink-0" />
+                      <span>Email Pemulihan Terkirim! 💌</span>
+                    </div>
+                    <p className="leading-relaxed">
+                      Tautan untuk mereset kata sandi telah dikirimkan ke alamat email:
+                    </p>
+                    <p className="font-mono font-bold bg-[#FDF8EE] p-2 border border-[#4E6E5B] text-center select-all break-all">
+                      {forgotEmail}
+                    </p>
+                    <p className="text-[11px] text-[#2C4235]/80 leading-relaxed">
+                      Silakan periksa kotak masuk (Inbox) atau folder <strong>Spam/Promotions</strong> pada emailmu, lalu klik tautan tersebut untuk membuat kata sandi baru.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 pt-1">
+                    <PixelButton
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setAuthView('login');
+                        setForgotSent(false);
+                      }}
+                      className="w-full"
+                    >
+                      Kembali ke Halaman Masuk
+                    </PixelButton>
+
+                    <div className="text-center">
+                      <button
+                        type="button"
+                        onClick={handleRequestPasswordReset}
+                        disabled={isSendingResetEmail}
+                        className="text-xs text-[#6E5039] underline font-semibold hover:text-[#2C1E14]"
+                      >
+                        {isSendingResetEmail ? 'Sedang mengirim ulang...' : 'Belum menerima email? Kirim ulang'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {!supabase && (
+                    <div className="mt-3 p-3 bg-[#EFE2C6] border border-[#8C684C] text-[11px] text-[#4A3525]">
+                      <span className="font-bold block mb-1">💡 Simulasi Mode Demo:</span>
+                      <p className="mb-2">
+                        Karena saat ini berjalan di mode database demo lokal tanpa SMTP email riil, kamu dapat mengklik tombol simulasi berikut untuk menguji alur pembuatan kata sandi baru:
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setAuthView('reset_password')}
+                        className="w-full py-1.5 px-3 bg-[#6B8E78] hover:bg-[#587A65] text-white border border-[#2C1E14] text-xs font-bold transition"
+                      >
+                        Simulasikan Buka Tautan dari Email
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase mb-1">Kata Sandi Baru</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={6}
-                    value={resetNewPassword}
-                    onChange={(e) => setResetNewPassword(e.target.value)}
-                    placeholder="Minimal 6 karakter"
-                    className="w-full px-3 py-2 bg-white border-2 border-[#4A3525] text-sm"
-                  />
+              )
+            )}
+
+            {/* Form Pembuatan Kata Sandi Baru (Hanya Muncul dari Tautan Email yang Sah) */}
+            {authView === 'reset_password' && (
+              <form onSubmit={handleConfirmNewPassword} className="space-y-4">
+                <div className="p-3 bg-[#E6EFE9] border-2 border-[#4E6E5B] text-xs text-[#2C4235] space-y-1">
+                  <p className="font-bold flex items-center gap-1.5 text-[#2C4235]">
+                    <ShieldCheck className="w-4 h-4 text-[#4E6E5B]" />
+                    Verifikasi Berhasil! Buat Kata Sandi Baru
+                  </p>
+                  <p className="text-[11px] text-[#2C4235]/90 leading-relaxed">
+                    Tautan pemulihan akun berhasil diverifikasi. Silakan masukkan kata sandi baru yang ingin kamu gunakan.
+                  </p>
                 </div>
-                <div className="flex gap-2">
-                  <PixelButton variant="secondary" onClick={() => setAuthView('login')} className="flex-1">
-                    Kembali
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#4A3525] mb-1">
+                    Kata Sandi Baru (Min. 6 Karakter)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showResetPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      value={resetNewPassword}
+                      onChange={(e) => setResetNewPassword(e.target.value)}
+                      placeholder="Minimal 6 karakter..."
+                      className="w-full px-3 py-2.5 pr-10 bg-white border-2 border-[#4A3525] text-sm focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowResetPassword((s) => !s)}
+                      className="absolute right-2.5 top-2.5 text-[#6E5039]"
+                    >
+                      {showResetPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-[#4A3525] mb-1">
+                    Konfirmasi Kata Sandi Baru
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      value={resetConfirmPassword}
+                      onChange={(e) => setResetConfirmPassword(e.target.value)}
+                      placeholder="Ulangi kata sandi baru..."
+                      className="w-full px-3 py-2.5 pr-10 bg-white border-2 border-[#4A3525] text-sm focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword((s) => !s)}
+                      className="absolute right-2.5 top-2.5 text-[#6E5039]"
+                    >
+                      {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <PixelButton
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setAuthView('login');
+                      setForgotSent(false);
+                    }}
+                    className="flex-1"
+                  >
+                    Batal
                   </PixelButton>
-                  <PixelButton type="submit" variant="primary" className="flex-1">
-                    Simpan Sandi Baru
+                  <PixelButton
+                    type="submit"
+                    variant="primary"
+                    disabled={isUpdatingPassword}
+                    className="flex-1"
+                  >
+                    {isUpdatingPassword ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Menyimpan...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Simpan Sandi Baru</span>
+                      </>
+                    )}
                   </PixelButton>
                 </div>
               </form>
