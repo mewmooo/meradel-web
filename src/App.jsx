@@ -823,17 +823,6 @@ export default function App() {
     };
   }, [loadSupabaseData, showToast]);
 
-  // Auto-sync berkala antar akun pasangan (polling setiap 7 detik jika sedang terhubung dunia)
-  useEffect(() => {
-    if (!supabase || !currentUserId || !currentCouple) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        loadSupabaseData(currentUserId);
-      }
-    }, 7000);
-    return () => clearInterval(interval);
-  }, [currentUserId, currentCouple, loadSupabaseData]);
-
   // ============================================================================
   // 7. BACKEND / RLS AUTHORIZATION LAYER
   // ============================================================================
@@ -863,6 +852,17 @@ export default function App() {
     if (!currentMembership) return null;
     return db.couples.find((c) => c.id === currentMembership.couple_id && c.unpaired_at === null) || null;
   }, [db.couples, currentMembership]);
+
+  // Auto-sync berkala antar akun pasangan (polling setiap 7 detik jika sedang terhubung dunia)
+  useEffect(() => {
+    if (!supabase || !currentUserId || !currentCouple) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadSupabaseData(currentUserId);
+      }
+    }, 7000);
+    return () => clearInterval(interval);
+  }, [currentUserId, currentCouple, loadSupabaseData]);
 
   const partnerProfile = useMemo(() => {
     if (!currentCouple || !currentUserId) return null;
