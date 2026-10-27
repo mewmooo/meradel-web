@@ -1465,7 +1465,9 @@ export default function App() {
         await loadSupabaseData(currentUserId);
         return;
       } catch (err) {
-        console.warn('Gagal buat dunia di Supabase:', err);
+        console.error('Gagal buat dunia di Supabase:', err);
+        showToast(err.message || 'Gagal membuat dunia di Supabase. Periksa izin/RLS.', 'error');
+        return;
       }
     }
 
@@ -1556,7 +1558,9 @@ export default function App() {
         await loadSupabaseData(currentUserId);
         return;
       } catch (err) {
-        console.warn('Gagal buat invite di Supabase:', err);
+        console.error('Gagal buat invite di Supabase:', err);
+        showToast(err.message || 'Gagal membuat kode undangan di Supabase.', 'error');
+        return;
       }
     }
 
