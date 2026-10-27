@@ -1399,7 +1399,7 @@ export default function App() {
     showToast('Kamu telah keluar dari sesi akun.', 'info');
   };
 
-  const handleCreateWorld = (e) => {
+  const handleCreateWorld = async (e) => {
     e.preventDefault();
     if (!currentUserId) return;
     if (currentCouple) {
@@ -1419,6 +1419,55 @@ export default function App() {
       .toUpperCase()}`;
     const tokenHash = hashInviteToken(rawCode);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    if (supabase) {
+      try {
+        const { data: couple, error: coupleErr } = await supabase
+          .from('couples')
+          .insert({
+            name: trimmedName,
+            created_by: currentUserId,
+          })
+          .select()
+          .single();
+
+        if (coupleErr) throw coupleErr;
+
+        await supabase.from('couple_members').insert({
+          couple_id: couple.id,
+          user_id: currentUserId,
+          role: 'owner',
+        });
+
+        await supabase.from('couple_invites').insert({
+          couple_id: couple.id,
+          token_hash: tokenHash,
+          created_by: currentUserId,
+          expires_at: expiresAt,
+        });
+
+        await supabase.from('garden_state').insert({
+          couple_id: couple.id,
+          points: 30,
+        });
+
+        await supabase.from('cycle_sharing_settings').upsert({
+          user_id: currentUserId,
+          couple_id: couple.id,
+          share_cycle: false,
+          share_mood: false,
+          share_mood_note: false,
+        });
+
+        setGeneratedRawToken(rawCode);
+        setNewWorldName('');
+        showToast('Dunia baru dan kode undangan 24 jam berhasil dibuat di Supabase Cloud!', 'success');
+        await loadSupabaseData(currentUserId);
+        return;
+      } catch (err) {
+        console.warn('Gagal buat dunia di Supabase:', err);
+      }
+    }
 
     const newCouple = {
       id: coupleId,
@@ -1484,7 +1533,7 @@ export default function App() {
     showToast('Dunia baru dan kode undangan 24 jam berhasil dibuat!', 'success');
   };
 
-  const handleGenerateInviteForExistingCouple = () => {
+  const handleGenerateInviteForExistingCouple = async () => {
     if (!currentUserId || !currentCouple) return;
     const rawCode = `MRDL-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random()
       .toString(36)
@@ -1492,6 +1541,24 @@ export default function App() {
       .toUpperCase()}`;
     const tokenHash = hashInviteToken(rawCode);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    if (supabase) {
+      try {
+        const { error } = await supabase.from('couple_invites').insert({
+          couple_id: currentCouple.id,
+          token_hash: tokenHash,
+          created_by: currentUserId,
+          expires_at: expiresAt,
+        });
+        if (error) throw error;
+        setGeneratedRawToken(rawCode);
+        showToast('Kode undangan baru berhasil dibuat (berlaku 24 jam).', 'success');
+        await loadSupabaseData(currentUserId);
+        return;
+      } catch (err) {
+        console.warn('Gagal buat invite di Supabase:', err);
+      }
+    }
 
     const newInvite = {
       id: `inv_${Date.now()}`,
@@ -1512,7 +1579,7 @@ export default function App() {
     showToast('Kode undangan baru berhasil dibuat (berlaku 24 jam).', 'success');
   };
 
-  const handleJoinWithCode = (e) => {
+  const handleJoinWithCode = async (e) => {
     e.preventDefault();
     if (!currentUserId) return;
     if (currentCouple) {
@@ -1524,6 +1591,27 @@ export default function App() {
     if (!cleanedCode) {
       showToast('Masukkan kode undangan terlebih dahulu.', 'error');
       return;
+    }
+
+    if (supabase) {
+      try {
+        const { data: coupleId, error } = await supabase.rpc('redeem_couple_invite', {
+          raw_token: cleanedCode,
+        });
+
+        if (error) {
+          showToast(error.message || 'Kode undangan tidak valid atau sudah kedaluwarsa.', 'error');
+          return;
+        }
+
+        showToast('Selamat! Kamu berhasil terhubung ke dunia pasangan!', 'success');
+        setJoinTokenInput('');
+        await loadSupabaseData(currentUserId);
+        return;
+      } catch (err) {
+        showToast('Gagal memproses kode undangan di Supabase.', 'error');
+        return;
+      }
     }
 
     const hashedInput = hashInviteToken(cleanedCode);
@@ -2762,22 +2850,6 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-
-                  {!supabase && (
-                    <div className="mt-3 p-3 bg-[#EFE2C6] border border-[#8C684C] text-[11px] text-[#4A3525]">
-                      <span className="font-bold block mb-1">💡 Simulasi Mode Demo:</span>
-                      <p className="mb-2">
-                        Karena saat ini berjalan di mode database demo lokal tanpa SMTP email riil, kamu dapat mengklik tombol simulasi berikut untuk menguji alur pembuatan kata sandi baru:
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setAuthView('reset_password')}
-                        className="w-full py-1.5 px-3 bg-[#6B8E78] hover:bg-[#587A65] text-white border border-[#2C1E14] text-xs font-bold transition"
-                      >
-                        Simulasikan Buka Tautan dari Email
-                      </button>
-                    </div>
-                  )}
                 </div>
               )
             )}
