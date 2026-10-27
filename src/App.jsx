@@ -676,7 +676,101 @@ export default function App() {
   // --- Custom Confirmation Modal State (Tanpa window.confirm) ---
   const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // --- Listener Pemulihan Kata Sandi dari Email (Supabase Recovery & URL Hash) ---
+  // --- Fungsi Sinkronisasi Data Cloud Supabase ke State Lokal ---
+  const loadSupabaseData = useCallback(async (userId) => {
+    if (!supabase || !userId) return;
+    try {
+      // 1. Ambil profil user saat ini
+      const { data: myProfile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      // 2. Ambil keanggotaan couple user
+      const { data: memberships } = await supabase
+        .from('couple_members')
+        .select('*')
+        .eq('user_id', userId);
+
+      let couplesData = [];
+      let allMembers = memberships || [];
+      let partnerProfiles = [];
+
+      if (memberships && memberships.length > 0) {
+        const coupleIds = memberships.map((m) => m.couple_id);
+        const { data: couples } = await supabase
+          .from('couples')
+          .select('*')
+          .in('id', coupleIds);
+        couplesData = couples || [];
+
+        const { data: members } = await supabase
+          .from('couple_members')
+          .select('*')
+          .in('couple_id', coupleIds);
+        if (members) allMembers = members;
+
+        const partnerIds = allMembers.map((m) => m.user_id).filter((id) => id !== userId);
+        if (partnerIds.length > 0) {
+          const { data: partners } = await supabase
+            .from('profiles')
+            .select('*')
+            .in('id', partnerIds);
+          if (partners) partnerProfiles = partners;
+        }
+      }
+
+      // 3. Ambil modul data lainnya dari Supabase
+      const [
+        { data: cycles },
+        { data: cycleSettings },
+        { data: moods },
+        { data: wishes },
+        { data: memories },
+        { data: notes },
+        { data: gardens },
+      ] = await Promise.all([
+        supabase.from('cycle_logs').select('*'),
+        supabase.from('cycle_sharing_settings').select('*'),
+        supabase.from('mood_entries').select('*'),
+        supabase.from('wishlist_items').select('*'),
+        supabase.from('memories').select('*'),
+        supabase.from('love_notes').select('*'),
+        supabase.from('garden_state').select('*'),
+      ]);
+
+      const allFetchedProfiles = [
+        ...(myProfile ? [myProfile] : []),
+        ...partnerProfiles,
+      ];
+
+      setDb((prev) => ({
+        ...prev,
+        profiles: allFetchedProfiles.length > 0
+          ? [
+              ...prev.profiles.filter(
+                (p) => !allFetchedProfiles.some((fp) => fp.id === p.id)
+              ),
+              ...allFetchedProfiles,
+            ]
+          : prev.profiles,
+        couples: couplesData.length > 0 ? couplesData : prev.couples,
+        couple_members: allMembers.length > 0 ? allMembers : prev.couple_members,
+        cycle_logs: cycles || prev.cycle_logs,
+        cycle_sharing_settings: cycleSettings || prev.cycle_sharing_settings,
+        mood_entries: moods || prev.mood_entries,
+        wishlist_items: wishes || prev.wishlist_items,
+        memories: memories || prev.memories,
+        love_notes: notes || prev.love_notes,
+        garden_state: gardens && gardens.length > 0 ? gardens : prev.garden_state,
+      }));
+    } catch (err) {
+      console.warn('Sinkronisasi Supabase:', err);
+    }
+  }, []);
+
+  // --- Inisialisasi Sesi Supabase Cloud & Recovery Listener ---
   useEffect(() => {
     const checkRecoveryUrl = () => {
       const hash = window.location.hash;
@@ -695,10 +789,24 @@ export default function App() {
     window.addEventListener('hashchange', checkRecoveryUrl);
 
     if (supabase) {
+      // 1. Pulihkan sesi login aktif saat pertama kali dibuka
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user) {
+          setCurrentUserId(session.user.id);
+          loadSupabaseData(session.user.id);
+        }
+      });
+
+      // 2. Listener event perubahan auth
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event) => {
-        if (event === 'PASSWORD_RECOVERY') {
+      } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          setCurrentUserId(session.user.id);
+          loadSupabaseData(session.user.id);
+        } else if (event === 'SIGNED_OUT') {
+          setCurrentUserId(null);
+        } else if (event === 'PASSWORD_RECOVERY') {
           setAuthView('reset_password');
           showToast('Sesi pemulihan akun aktif dari email. Silakan atur kata sandi baru kamu.', 'info');
         }
@@ -713,7 +821,7 @@ export default function App() {
     return () => {
       window.removeEventListener('hashchange', checkRecoveryUrl);
     };
-  }, [showToast]);
+  }, [loadSupabaseData, showToast]);
 
   // ============================================================================
   // 7. BACKEND / RLS AUTHORIZATION LAYER
@@ -912,6 +1020,7 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
 
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
@@ -992,24 +1101,90 @@ export default function App() {
   // 9. HANDLER AUTENTIKASI PUBLIK & PAIRING
   // ============================================================================
 
-  const handleLoginSubmit = (e) => {
+  const handleLoginSubmit = async (e) => {
     e.preventDefault();
     const trimmedEmail = loginEmail.trim().toLowerCase();
-    const found = db.profiles.find((p) => p.email.toLowerCase() === trimmedEmail);
-    if (!found) {
-      showToast('Akun dengan email tersebut belum terdaftar. Silakan klik tab Daftar Baru.', 'error');
+    if (!trimmedEmail || !trimmedEmail.includes('@')) {
+      showToast('Masukkan alamat email yang valid.', 'error');
       return;
     }
-    if (found.password_hash && found.password_hash !== hashText(loginPassword)) {
-      showToast('Kata sandi yang kamu masukkan salah.', 'error');
+    if (!loginPassword) {
+      showToast('Masukkan kata sandi akunmu.', 'error');
       return;
     }
-    setCurrentUserId(found.id);
-    setLoginPassword('');
-    showToast(`Selamat datang kembali di Meradel, ${found.display_name}!`, 'success');
+
+    setIsSubmittingAuth(true);
+    try {
+      if (supabase) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password: loginPassword,
+        });
+
+        if (error) {
+          const msg = error.message.toLowerCase();
+          if (msg.includes('invalid login credentials')) {
+            showToast('Email belum terdaftar atau kata sandi salah. Silakan periksa kembali atau buat akun baru.', 'error');
+          } else if (msg.includes('email not confirmed')) {
+            showToast('Email belum dikonfirmasi. Buka emailmu untuk verifikasi atau matikan "Confirm email" di Supabase.', 'error');
+          } else {
+            showToast(error.message, 'error');
+          }
+          return;
+        }
+
+        const user = data.user;
+        if (user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .maybeSingle();
+
+          const activeProfile = profile || {
+            id: user.id,
+            email: user.email || trimmedEmail,
+            display_name: user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
+            gender: user.user_metadata?.gender || 'female',
+            avatar_key: user.user_metadata?.avatar_key || 'mage_rose',
+            created_at: user.created_at,
+            updated_at: user.updated_at || new Date().toISOString(),
+          };
+
+          setDb((prev) => ({
+            ...prev,
+            profiles: [...prev.profiles.filter((p) => p.id !== user.id), activeProfile],
+          }));
+
+          setCurrentUserId(user.id);
+          setLoginPassword('');
+          showToast(`Selamat datang kembali di Meradel, ${activeProfile.display_name}!`, 'success');
+          await loadSupabaseData(user.id);
+          return;
+        }
+      }
+
+      // Fallback Mode Offline / Demo
+      const found = db.profiles.find((p) => p.email.toLowerCase() === trimmedEmail);
+      if (!found) {
+        showToast('Akun dengan email tersebut belum terdaftar. Silakan klik tab Daftar Baru.', 'error');
+        return;
+      }
+      if (found.password_hash && found.password_hash !== hashText(loginPassword)) {
+        showToast('Kata sandi yang kamu masukkan salah.', 'error');
+        return;
+      }
+      setCurrentUserId(found.id);
+      setLoginPassword('');
+      showToast(`Selamat datang kembali di Meradel, ${found.display_name}!`, 'success');
+    } catch {
+      showToast('Gagal menghubungi server autentikasi. Periksa koneksi internetmu.', 'error');
+    } finally {
+      setIsSubmittingAuth(false);
+    }
   };
 
-  const handleRegisterSubmit = (e) => {
+  const handleRegisterSubmit = async (e) => {
     e.preventDefault();
     const name = regName.trim();
     const email = regEmail.trim().toLowerCase();
@@ -1025,29 +1200,98 @@ export default function App() {
       showToast('Kata sandi minimal 6 karakter.', 'error');
       return;
     }
-    if (db.profiles.some((p) => p.email.toLowerCase() === email)) {
-      showToast('Email sudah terdaftar. Silakan masuk menggunakan akunmu.', 'error');
-      return;
+
+    setIsSubmittingAuth(true);
+    try {
+      if (supabase) {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password: regPassword,
+          options: {
+            data: {
+              display_name: name,
+              gender: regGender,
+              avatar_key: regAvatar,
+            },
+          },
+        });
+
+        if (error) {
+          if (error.message.toLowerCase().includes('already registered')) {
+            showToast('Email ini sudah terdaftar di Supabase Cloud. Silakan langsung masuk.', 'error');
+          } else {
+            showToast(error.message, 'error');
+          }
+          return;
+        }
+
+        const user = data.user;
+        if (user) {
+          const profileData = {
+            id: user.id,
+            email,
+            display_name: name,
+            gender: regGender,
+            avatar_key: regAvatar,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          try {
+            await supabase.from('profiles').upsert(profileData);
+          } catch {
+            // Abaikan jika trigger sudah membuat profile
+          }
+
+          setDb((prev) => ({
+            ...prev,
+            profiles: [...prev.profiles.filter((p) => p.id !== user.id), profileData],
+          }));
+
+          setCurrentUserId(user.id);
+          setRegName('');
+          setRegEmail('');
+          setRegPassword('');
+
+          if (!data.session) {
+            showToast(`Akun ${name} terdaftar! Jika tombol Masuk belum bisa, buka emailmu untuk verifikasi (atau matikan Confirm Email di Supabase Dashboard).`, 'info');
+          } else {
+            showToast(`Akun ${name} berhasil dibuat di Supabase Cloud! Sekarang buat atau gabung dunia pasanganmu.`, 'success');
+          }
+          await loadSupabaseData(user.id);
+          return;
+        }
+      }
+
+      // Fallback Mode Offline / Demo
+      if (db.profiles.some((p) => p.email.toLowerCase() === email)) {
+        showToast('Email sudah terdaftar. Silakan masuk menggunakan akunmu.', 'error');
+        return;
+      }
+      const newProfile = {
+        id: `user_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        email,
+        password_hash: hashText(regPassword),
+        display_name: name,
+        gender: regGender,
+        avatar_key: regAvatar,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setDb((prev) => ({
+        ...prev,
+        profiles: [...prev.profiles, newProfile],
+      }));
+      setCurrentUserId(newProfile.id);
+      setRegName('');
+      setRegEmail('');
+      setRegPassword('');
+      showToast(`Akun ${name} berhasil dibuat! Sekarang buat atau gabung dunia pasanganmu.`, 'success');
+    } catch {
+      showToast('Gagal mendaftarkan akun. Periksa koneksi internetmu.', 'error');
+    } finally {
+      setIsSubmittingAuth(false);
     }
-    const newProfile = {
-      id: `user_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      email,
-      password_hash: hashText(regPassword),
-      display_name: name,
-      gender: regGender,
-      avatar_key: regAvatar,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    setDb((prev) => ({
-      ...prev,
-      profiles: [...prev.profiles, newProfile],
-    }));
-    setCurrentUserId(newProfile.id);
-    setRegName('');
-    setRegEmail('');
-    setRegPassword('');
-    showToast(`Akun ${name} berhasil dibuat! Sekarang buat atau gabung dunia pasanganmu.`, 'success');
   };
 
   // 1. Minta pengiriman tautan reset ke email (Aman - tidak mengubah sandi langsung)
@@ -1141,7 +1385,14 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (supabase) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // Abaikan jika offline
+      }
+    }
     setCurrentUserId(null);
     setActiveRoute('home');
     setAuthView('login');
@@ -2283,8 +2534,15 @@ export default function App() {
                   </div>
                 </div>
 
-                <PixelButton type="submit" variant="primary" className="w-full">
-                  Masuk ke Meradel
+                <PixelButton type="submit" variant="primary" disabled={isSubmittingAuth} className="w-full">
+                  {isSubmittingAuth ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Masuk ke Cloud...</span>
+                    </>
+                  ) : (
+                    'Masuk ke Meradel'
+                  )}
                 </PixelButton>
 
                 <p className="text-center text-xs text-[#6E5039] pt-1">
@@ -2392,8 +2650,15 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                <PixelButton type="submit" variant="pink" className="w-full">
-                  Buat Akun Meradel Sekarang
+                <PixelButton type="submit" variant="pink" disabled={isSubmittingAuth} className="w-full">
+                  {isSubmittingAuth ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Mendaftarkan Akun ke Cloud...</span>
+                    </>
+                  ) : (
+                    'Buat Akun Meradel Sekarang'
+                  )}
                 </PixelButton>
               </form>
             )}
