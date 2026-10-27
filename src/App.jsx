@@ -2108,15 +2108,35 @@ export default function App() {
       showToast('Tipe file tidak didukung. Gunakan gambar JPG, PNG, WebP, atau GIF.', 'error');
       return;
     }
-    if (file.size > 4 * 1024 * 1024) {
-      showToast('Ukuran gambar maksimal 4 MB.', 'error');
-      return;
-    }
     const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setMemImagePreview(reader.result);
-      }
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 700;
+        const MAX_HEIGHT = 700;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.75);
+        setMemImagePreview(compressedDataUrl);
+      };
+      img.src = event.target.result;
     };
     reader.readAsDataURL(file);
   };
@@ -2143,6 +2163,7 @@ export default function App() {
             title,
             caption: captionVal,
             memory_date: memDateVal,
+            media_path: memImagePreview || null,
             visibility: memVisibility,
           })
           .select()
@@ -2709,22 +2730,50 @@ export default function App() {
     );
   };
 
-  const handleSaveSettings = (e) => {
+  const handleSaveSettings = async (e) => {
     e.preventDefault();
     if (!currentUser || !currentCouple) return;
+
+    const newDisplayName = editProfileName.trim() || currentUser.display_name;
+    const newWorldName = editWorldName.trim() || currentCouple.name;
+    const newAnnivDate = editAnnivDate || null;
+    const nowIso = new Date().toISOString();
+
+    if (supabase) {
+      try {
+        await supabase
+          .from('profiles')
+          .update({ display_name: newDisplayName, updated_at: nowIso })
+          .eq('id', currentUser.id);
+
+        await supabase
+          .from('couples')
+          .update({ name: newWorldName, anniversary_date: newAnnivDate })
+          .eq('id', currentCouple.id);
+
+        await loadSupabaseData(currentUserId);
+        showToast('Profil dan pengaturan dunia berhasil disimpan ke Cloud!', 'success');
+        return;
+      } catch (err) {
+        console.error('Gagal simpan settings di Supabase:', err);
+        showToast(err.message || 'Gagal menyimpan pengaturan ke Supabase.', 'error');
+        return;
+      }
+    }
+
     setDb((prev) => ({
       ...prev,
       profiles: prev.profiles.map((p) =>
         p.id === currentUser.id
-          ? { ...p, display_name: editProfileName.trim() || p.display_name, updated_at: new Date().toISOString() }
+          ? { ...p, display_name: newDisplayName, updated_at: nowIso }
           : p
       ),
       couples: prev.couples.map((c) =>
         c.id === currentCouple.id
           ? {
               ...c,
-              name: editWorldName.trim() || c.name,
-              anniversary_date: editAnnivDate || null,
+              name: newWorldName,
+              anniversary_date: newAnnivDate,
             }
           : c
       ),
@@ -2738,8 +2787,19 @@ export default function App() {
       title: 'Putuskan Hubungan Dunia (Unpair)?',
       message:
         'Dunia pasangan ini akan dinonaktifkan. Catatan siklus dan mood pribadimu tetap aman di akunmu, namun kamu memerlukan kode undangan baru untuk terhubung kembali.',
-      onConfirm: () => {
+      onConfirm: async () => {
         const nowIso = new Date().toISOString();
+        if (supabase) {
+          try {
+            await supabase
+              .from('couples')
+              .update({ unpaired_at: nowIso })
+              .eq('id', currentCouple.id);
+            await loadSupabaseData(currentUserId);
+          } catch (err) {
+            console.warn('Gagal unpair di Supabase:', err);
+          }
+        }
         setDb((prev) => ({
           ...prev,
           couples: prev.couples.map((c) =>
@@ -4429,10 +4489,10 @@ export default function App() {
                 variant={mem.visibility === 'private' ? 'warm' : 'cream'}
               >
                 <div className="flex flex-col sm:flex-row gap-4">
-                  {mem.media_data_url ? (
-                    <div className="sm:w-48 h-40 shrink-0 border-2 border-[#4A3525] overflow-hidden bg-[#EFE2C6]">
+                  {(mem.media_data_url || (mem.media_path && (mem.media_path.startsWith('data:image') || mem.media_path.startsWith('http')))) ? (
+                    <div className="w-full sm:w-48 h-40 shrink-0 border-2 border-[#4A3525] overflow-hidden bg-[#EFE2C6]">
                       <img
-                        src={mem.media_data_url}
+                        src={mem.media_data_url || mem.media_path}
                         alt={mem.title}
                         className="w-full h-full object-cover"
                       />
