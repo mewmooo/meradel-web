@@ -730,6 +730,8 @@ export default function App() {
         { data: memories },
         { data: notes },
         { data: gardens },
+        { data: sessions },
+        { data: answers },
       ] = await Promise.all([
         supabase.from('cycle_logs').select('*'),
         supabase.from('cycle_sharing_settings').select('*'),
@@ -738,6 +740,8 @@ export default function App() {
         supabase.from('memories').select('*'),
         supabase.from('love_notes').select('*'),
         supabase.from('garden_state').select('*'),
+        supabase.from('game_sessions').select('*'),
+        supabase.from('game_answers').select('*'),
       ]);
 
       const allFetchedProfiles = [
@@ -764,6 +768,18 @@ export default function App() {
         memories: memories || [],
         love_notes: notes || [],
         garden_state: gardens && gardens.length > 0 ? gardens : prev.garden_state,
+        game_sessions: sessions || prev.game_sessions,
+        game_answers: answers
+          ? answers.map((a) => ({
+              id: a.id,
+              session_id: a.session_id,
+              user_id: a.user_id,
+              question_id: a.question_id,
+              answer_text: a.answer_json?.answer_text || a.answer_text || '',
+              skipped: Boolean(a.answer_json?.skipped ?? a.skipped),
+              created_at: a.created_at,
+            }))
+          : prev.game_answers,
       }));
     } catch (err) {
       console.warn('Sinkronisasi Supabase:', err);
@@ -2676,16 +2692,89 @@ export default function App() {
     }
   };
 
-  const handleSubmitQuizAnswer = (questionId, skip = false) => {
+  const handleSubmitQuizAnswer = async (questionId, skip = false) => {
     if (!currentUserId || !currentCouple) return;
-    const activeSession = db.game_sessions.find((s) => s.couple_id === currentCouple.id);
-    const sessionId = activeSession ? activeSession.id : `sess_${currentCouple.id}`;
-
     const text = skip ? 'Melewati pertanyaan ini' : (quizInputs[questionId] || '').trim();
     if (!skip && !text) {
       showToast('Tulis jawabanmu terlebih dahulu atau pilih tombol Lewati.', 'error');
       return;
     }
+
+    if (supabase) {
+      try {
+        let activeSession = db.game_sessions.find((s) => s.couple_id === currentCouple.id);
+        if (!activeSession) {
+          const { data: createdSession, error: sErr } = await supabase
+            .from('game_sessions')
+            .insert({
+              couple_id: currentCouple.id,
+              game_type: 'couple_quiz',
+              created_by: currentUserId,
+            })
+            .select()
+            .single();
+          if (sErr) throw sErr;
+          activeSession = createdSession;
+        }
+
+        const { error: ansErr } = await supabase
+          .from('game_answers')
+          .upsert(
+            {
+              session_id: activeSession.id,
+              user_id: currentUserId,
+              question_id: questionId,
+              answer_json: { answer_text: text, skipped: skip },
+            },
+            { onConflict: 'session_id, user_id, question_id' }
+          );
+
+        if (ansErr) throw ansErr;
+
+        setDb((prev) => {
+          const filtered = prev.game_answers.filter(
+            (a) => !(a.session_id === activeSession.id && a.user_id === currentUserId && a.question_id === questionId)
+          );
+          return {
+            ...prev,
+            game_answers: [
+              ...filtered,
+              {
+                id: `ans_${Date.now()}`,
+                session_id: activeSession.id,
+                user_id: currentUserId,
+                question_id: questionId,
+                answer_text: text,
+                skipped: skip,
+                created_at: new Date().toISOString(),
+              },
+            ],
+          };
+        });
+
+        const gotReward = awardGardenPointsIdempotent(
+          'quiz_answered',
+          questionId,
+          5,
+          `quiz_ans:${currentCouple.id}:${currentUserId}:${questionId}`
+        );
+
+        setQuizInputs((prev) => ({ ...prev, [questionId]: '' }));
+        showToast(
+          gotReward ? 'Jawaban tersimpan di Cloud! +5 Poin Kasih untukmu.' : 'Jawaban berhasil diperbarui di Cloud.',
+          'success'
+        );
+        await loadSupabaseData(currentUserId);
+        return;
+      } catch (err) {
+        console.error('Gagal simpan jawaban kuis di Supabase:', err);
+        showToast(err.message || 'Gagal menyimpan jawaban kuis ke Supabase.', 'error');
+        return;
+      }
+    }
+
+    const activeSession = db.game_sessions.find((s) => s.couple_id === currentCouple.id);
+    const sessionId = activeSession ? activeSession.id : `sess_${currentCouple.id}`;
 
     setDb((prev) => {
       const existingAns = prev.game_answers.find(
@@ -2741,15 +2830,28 @@ export default function App() {
 
     if (supabase) {
       try {
-        await supabase
+        const { error: profErr } = await supabase
           .from('profiles')
           .update({ display_name: newDisplayName, updated_at: nowIso })
           .eq('id', currentUser.id);
+        if (profErr) throw profErr;
 
-        await supabase
+        const { error: coupleErr } = await supabase
           .from('couples')
           .update({ name: newWorldName, anniversary_date: newAnnivDate })
           .eq('id', currentCouple.id);
+        if (coupleErr) throw coupleErr;
+
+        // Optimistic update state
+        setDb((prev) => ({
+          ...prev,
+          profiles: prev.profiles.map((p) =>
+            p.id === currentUser.id ? { ...p, display_name: newDisplayName, updated_at: nowIso } : p
+          ),
+          couples: prev.couples.map((c) =>
+            c.id === currentCouple.id ? { ...c, name: newWorldName, anniversary_date: newAnnivDate } : c
+          ),
+        }));
 
         await loadSupabaseData(currentUserId);
         showToast('Profil dan pengaturan dunia berhasil disimpan ke Cloud!', 'success');
@@ -5194,17 +5296,11 @@ export default function App() {
         <div className="space-y-4">
           {filteredQuestions.map((q) => {
             const myAnswer = db.game_answers.find(
-              (a) =>
-                a.session_id === sessionId &&
-                a.question_id === q.id &&
-                a.user_id === currentUserId
+              (a) => a.question_id === q.id && a.user_id === currentUserId
             );
             const partnerAnswer = partnerProfile
               ? db.game_answers.find(
-                  (a) =>
-                    a.session_id === sessionId &&
-                    a.question_id === q.id &&
-                    a.user_id === partnerProfile.id
+                  (a) => a.question_id === q.id && a.user_id === partnerProfile.id
                 )
               : null;
 
