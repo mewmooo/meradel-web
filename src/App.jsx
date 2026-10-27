@@ -755,14 +755,14 @@ export default function App() {
               ...allFetchedProfiles,
             ]
           : prev.profiles,
-        couples: couplesData.length > 0 ? couplesData : prev.couples,
-        couple_members: allMembers.length > 0 ? allMembers : prev.couple_members,
-        cycle_logs: cycles || prev.cycle_logs,
-        cycle_sharing_settings: cycleSettings || prev.cycle_sharing_settings,
-        mood_entries: moods || prev.mood_entries,
-        wishlist_items: wishes || prev.wishlist_items,
-        memories: memories || prev.memories,
-        love_notes: notes || prev.love_notes,
+        couples: couplesData,
+        couple_members: allMembers,
+        cycle_logs: cycles || [],
+        cycle_sharing_settings: cycleSettings || [],
+        mood_entries: moods || [],
+        wishlist_items: wishes || [],
+        memories: memories || [],
+        love_notes: notes || [],
         garden_state: gardens && gardens.length > 0 ? gardens : prev.garden_state,
       }));
     } catch (err) {
@@ -1537,6 +1537,19 @@ export default function App() {
 
   const handleGenerateInviteForExistingCouple = async () => {
     if (!currentUserId || !currentCouple) return;
+
+    // Jika ID couple bukan UUID (sisa offline dummy), bersihkan dan minta buat di Cloud
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentCouple.id);
+    if (!isUuid && supabase) {
+      setDb((prev) => ({
+        ...prev,
+        couples: prev.couples.filter((c) => c.id !== currentCouple.id),
+        couple_members: prev.couple_members.filter((cm) => cm.couple_id !== currentCouple.id),
+      }));
+      showToast('Sesi dunia lokal lama dibersihkan. Silakan klik "Buat Dunia Baru" untuk membuat dunia di Cloud Supabase.', 'info');
+      return;
+    }
+
     const rawCode = `MRDL-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random()
       .toString(36)
       .substring(2, 6)
