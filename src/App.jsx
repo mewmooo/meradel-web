@@ -1035,6 +1035,30 @@ export default function App() {
         };
       });
 
+      if (awarded && supabase && currentCouple) {
+        supabase
+          .from('garden_state')
+          .select('points, garden_json')
+          .eq('couple_id', currentCouple.id)
+          .maybeSingle()
+          .then(({ data }) => {
+            const curPts = typeof data?.points === 'number' ? data.points : 30;
+            supabase
+              .from('garden_state')
+              .upsert(
+                {
+                  couple_id: currentCouple.id,
+                  points: curPts + points,
+                  garden_json: data?.garden_json || {},
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'couple_id' }
+              )
+              .then(() => {});
+          })
+          .catch(() => {});
+      }
+
       return awarded;
     },
     [currentUserId, currentCouple]
@@ -1048,6 +1072,11 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
+  // UI state for forgot‑password flow
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [isSendingReset, setIsSendingReset] = useState(false);
+  const [resetError, setResetError] = useState('');
 
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
@@ -2421,6 +2450,29 @@ export default function App() {
     return normalizeGardenState(raw, currentCouple.id, currentUserId);
   }, [db.garden_state, currentCouple, currentUserId, normalizeGardenState]);
 
+  const syncGardenStateToSupabase = useCallback(
+    async (nextPoints, nextTiles, nextUnlocked) => {
+      if (!supabase || !currentCouple) return;
+      try {
+        await supabase.from('garden_state').upsert(
+          {
+            couple_id: currentCouple.id,
+            points: nextPoints,
+            garden_json: {
+              tiles: nextTiles,
+              unlocked_items: nextUnlocked,
+            },
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'couple_id' }
+        );
+      } catch (err) {
+        console.warn('Gagal sinkronisasi Sanctuary ke Supabase:', err);
+      }
+    },
+    [currentCouple]
+  );
+
   const handleUnlockGardenItem = (itemType, cost) => {
     if (!currentCouple || !currentGarden) return;
     if (currentGarden.unlocked_items.includes(itemType)) return;
@@ -2429,19 +2481,23 @@ export default function App() {
       return;
     }
 
+    const nextPoints = currentGarden.points - cost;
+    const nextUnlocked = [...currentGarden.unlocked_items, itemType];
+
     setDb((prev) => ({
       ...prev,
       garden_state: prev.garden_state.map((g) =>
         g.couple_id === currentCouple.id
           ? {
               ...g,
-              points: g.points - cost,
-              unlocked_items: [...g.unlocked_items, itemType],
+              points: nextPoints,
+              unlocked_items: nextUnlocked,
               updated_at: new Date().toISOString(),
             }
           : g
       ),
     }));
+    syncGardenStateToSupabase(nextPoints, currentGarden.tiles, nextUnlocked);
     setSelectedBrush(itemType);
     showToast('Item Sanctuary berhasil diadopsi/dibuka dan siap ditempatkan!', 'success');
   };
@@ -2468,48 +2524,54 @@ export default function App() {
         return;
       }
 
+      const nextPoints = currentGarden.points - careCost;
+      const nextTiles = currentGarden.tiles.map((t) =>
+        t.index === tileIndex
+          ? {
+              ...t,
+              stage: Math.min(4, t.stage + 1),
+              last_watered_at: todayLocalISO(),
+            }
+          : t
+      );
+
       setDb((prev) => ({
         ...prev,
         garden_state: prev.garden_state.map((g) =>
           g.couple_id === currentCouple.id
             ? {
                 ...g,
-                points: g.points - careCost,
-                tiles: g.tiles.map((t) =>
-                  t.index === tileIndex
-                    ? {
-                        ...t,
-                        stage: Math.min(4, t.stage + 1),
-                        last_watered_at: todayLocalISO(),
-                      }
-                    : t
-                ),
+                points: nextPoints,
+                tiles: nextTiles,
                 updated_at: new Date().toISOString(),
               }
             : g
         ),
       }));
+      syncGardenStateToSupabase(nextPoints, nextTiles, currentGarden.unlocked_items);
       showToast('Dirawat dengan penuh kasih! Naik 1 Level (-2 ✨) ❤️', 'success');
       return;
     }
 
     if (selectedBrush === 'clear') {
+      const nextTiles = currentGarden.tiles.map((t) =>
+        t.index === tileIndex
+          ? { index: tileIndex, item: 'empty', stage: 1, last_watered_at: null, planted_by: null }
+          : t
+      );
       setDb((prev) => ({
         ...prev,
         garden_state: prev.garden_state.map((g) =>
           g.couple_id === currentCouple.id
             ? {
                 ...g,
-                tiles: g.tiles.map((t) =>
-                  t.index === tileIndex
-                    ? { index: tileIndex, item: 'empty', stage: 1, last_watered_at: null, planted_by: null }
-                    : t
-                ),
+                tiles: nextTiles,
                 updated_at: new Date().toISOString(),
               }
             : g
         ),
       }));
+      syncGardenStateToSupabase(currentGarden.points, nextTiles, currentGarden.unlocked_items);
       return;
     }
 
@@ -2518,28 +2580,31 @@ export default function App() {
       return;
     }
 
+    const nextTiles = currentGarden.tiles.map((t) =>
+      t.index === tileIndex
+        ? {
+            index: tileIndex,
+            item: selectedBrush,
+            stage: 1,
+            last_watered_at: todayLocalISO(),
+            planted_by: currentUserId,
+          }
+        : t
+    );
+
     setDb((prev) => ({
       ...prev,
       garden_state: prev.garden_state.map((g) =>
         g.couple_id === currentCouple.id
           ? {
               ...g,
-              tiles: g.tiles.map((t) =>
-                t.index === tileIndex
-                  ? {
-                      index: tileIndex,
-                      item: selectedBrush,
-                      stage: 1,
-                      last_watered_at: todayLocalISO(),
-                      planted_by: currentUserId,
-                    }
-                  : t
-              ),
+              tiles: nextTiles,
               updated_at: new Date().toISOString(),
             }
           : g
       ),
     }));
+    syncGardenStateToSupabase(currentGarden.points, nextTiles, currentGarden.unlocked_items);
   };
 
   const handleTreatAllPets = () => {
@@ -2550,24 +2615,28 @@ export default function App() {
       return;
     }
     let upgradedCount = 0;
+    const nextPoints = currentGarden.points - cost;
+    const nextTiles = currentGarden.tiles.map((t) => {
+      if (t.item !== 'empty' && t.stage < 4) {
+        upgradedCount++;
+        return { ...t, stage: Math.min(4, t.stage + 1), last_watered_at: todayLocalISO() };
+      }
+      return t;
+    });
+
     setDb((prev) => ({
       ...prev,
       garden_state: prev.garden_state.map((g) => {
         if (g.couple_id !== currentCouple.id) return g;
         return {
           ...g,
-          points: g.points - cost,
-          tiles: g.tiles.map((t) => {
-            if (t.item !== 'empty' && t.stage < 4) {
-              upgradedCount++;
-              return { ...t, stage: Math.min(4, t.stage + 1), last_watered_at: todayLocalISO() };
-            }
-            return t;
-          }),
+          points: nextPoints,
+          tiles: nextTiles,
           updated_at: new Date().toISOString(),
         };
       }),
     }));
+    syncGardenStateToSupabase(nextPoints, nextTiles, currentGarden.unlocked_items);
     setGardenAmbiance('sunset');
     showToast(
       upgradedCount > 0
@@ -2603,72 +2672,104 @@ export default function App() {
       'Kamu adalah asisten pembuat kuis pasangan romantis untuk aplikasi Meradel. Buat 3 pertanyaan refleksi/kuis pasangan yang hangat, santai, dan personal dalam Bahasa Indonesia berdasarkan daftar kenangan (Memories) pasangan yang diberikan.';
     const userQuery = `Pasangan ini adalah ${currentUser.display_name} dan ${partnerName}. Berikut daftar kenangan bersama mereka:\n${memoriesContext}\n\nBuatlah 3 pertanyaan Couple Quiz yang secara spesifik menyebut atau menggali perasaan dari momen-momen di atas.`;
 
-    const apiKey =
-      (typeof window !== 'undefined' && window.VITE_GEMINI_API_KEY) ||
-      (typeof process !== 'undefined' && process.env && process.env.VITE_GEMINI_API_KEY) ||
-      '';
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    let generatedQuestions = null;
 
-    const payload = {
-      contents: [{ parts: [{ text: userQuery }] }],
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'ARRAY',
-          items: {
-            type: 'OBJECT',
-            properties: {
-              category: { type: 'STRING' },
-              text: { type: 'STRING' },
-              memoryReference: { type: 'STRING' },
-            },
-            propertyOrdering: ['category', 'text', 'memoryReference'],
-          },
-        },
-      },
-    };
-
-    const fetchWithRetry = async (retries = 2, delay = 1000) => {
-      try {
-        const res = await fetch(apiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error('API request failed');
-        return await res.json();
-      } catch (err) {
-        if (retries <= 0) throw err;
-        await new Promise((r) => setTimeout(r, delay));
-        return fetchWithRetry(retries - 1, delay * 2);
+    // 1. Coba Serverless API terlebih dahulu (Keamanan API Key di server-side)
+    try {
+      const serverRes = await fetch('/api/quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentUserName: currentUser.display_name,
+          partnerName: partnerProfile ? partnerProfile.display_name : 'pasanganmu',
+          memories: sharedMems.slice(0, 5).map((m) => ({ title: m.title, caption: m.caption })),
+        }),
+      });
+      if (serverRes.ok) {
+        const data = await serverRes.json();
+        if (data?.questions && Array.isArray(data.questions) && data.questions.length > 0) {
+          generatedQuestions = data.questions;
+        }
       }
-    };
+    } catch (e) {
+      console.warn('Serverless quiz API unavailable, trying local fallback:', e);
+    }
+
+    // 2. Jika Serverless belum aktif, fallback ke pemanggilan client jika ada key
+    if (!generatedQuestions) {
+      const apiKey =
+        (typeof window !== 'undefined' && window.VITE_GEMINI_API_KEY) ||
+        (typeof process !== 'undefined' && process.env && process.env.VITE_GEMINI_API_KEY) ||
+        '';
+
+      if (apiKey) {
+        const systemPrompt =
+          'Kamu adalah asisten pembuat kuis pasangan romantis untuk aplikasi Meradel. Buat 3 pertanyaan refleksi/kuis pasangan yang hangat, santai, dan personal dalam Bahasa Indonesia berdasarkan daftar kenangan (Memories) pasangan yang diberikan.';
+        const userQuery = `Pasangan ini adalah ${currentUser.display_name} dan ${partnerName}. Berikut daftar kenangan bersama mereka:\n${memoriesContext}\n\nBuatlah 3 pertanyaan Couple Quiz yang secara spesifik menyebut atau menggali perasaan dari momen-momen di atas.`;
+
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+        const payload = {
+          contents: [{ parts: [{ text: userQuery }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'ARRAY',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  category: { type: 'STRING' },
+                  text: { type: 'STRING' },
+                  memoryReference: { type: 'STRING' },
+                },
+                propertyOrdering: ['category', 'text', 'memoryReference'],
+              },
+            },
+          },
+        };
+
+        try {
+          const res = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            const result = await res.json();
+            const rawJson = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (rawJson) {
+              const parsed = JSON.parse(rawJson);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                generatedQuestions = parsed;
+              }
+            }
+          }
+        } catch (clientErr) {
+          console.warn('Client Gemini call failed:', clientErr);
+        }
+      }
+    }
 
     try {
-      const result = await fetchWithRetry();
-      const rawJson = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (rawJson) {
-        const parsed = JSON.parse(rawJson);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const generatedItems = parsed.map((item, idx) => ({
-            id: `q_ai_${Date.now()}_${idx}`,
-            couple_id: currentCouple.id,
-            category: '✨ AI dari Kenangan',
-            text: item.text,
-            memoryReference: item.memoryReference || sharedMems[0].title,
-            isAi: true,
-          }));
+      if (generatedQuestions && Array.isArray(generatedQuestions) && generatedQuestions.length > 0) {
+        const generatedItems = generatedQuestions.map((item, idx) => ({
+          id: `q_ai_${Date.now()}_${idx}`,
+          couple_id: currentCouple.id,
+          category: '✨ AI dari Kenangan',
+          text: item.text,
+          memoryReference: item.memoryReference || sharedMems[0].title,
+          isAi: true,
+        }));
 
-          setDb((prev) => ({
-            ...prev,
-            custom_quiz_questions: [...generatedItems, ...(prev.custom_quiz_questions || [])],
-          }));
-          setQuizCategoryFilter('✨ AI dari Kenangan');
-          showToast('3 Pertanyaan AI berhasil dirangkai dari kenangan kalian!', 'success');
-          setIsGeneratingAiQuiz(false);
-          return;
-        }
+        setDb((prev) => ({
+          ...prev,
+          custom_quiz_questions: [...generatedItems, ...(prev.custom_quiz_questions || [])],
+        }));
+        setQuizCategoryFilter('✨ AI dari Kenangan');
+        showToast('3 Pertanyaan AI berhasil dirangkai dari kenangan kalian!', 'success');
+        setIsGeneratingAiQuiz(false);
+        return;
       }
       throw new Error('Fallback ke sintesis lokal');
     } catch {
@@ -2836,9 +2937,10 @@ export default function App() {
           .eq('id', currentUser.id);
         if (profErr) throw profErr;
 
+        const safeAnnivDate = newAnnivDate && newAnnivDate.trim() !== '' ? newAnnivDate : null;
         const { error: coupleErr } = await supabase
           .from('couples')
-          .update({ name: newWorldName, anniversary_date: newAnnivDate })
+          .update({ name: newWorldName.trim(), anniversary_date: safeAnnivDate })
           .eq('id', currentCouple.id);
         if (coupleErr) throw coupleErr;
 
@@ -2849,7 +2951,7 @@ export default function App() {
             p.id === currentUser.id ? { ...p, display_name: newDisplayName, updated_at: nowIso } : p
           ),
           couples: prev.couples.map((c) =>
-            c.id === currentCouple.id ? { ...c, name: newWorldName, anniversary_date: newAnnivDate } : c
+            c.id === currentCouple.id ? { ...c, name: newWorldName.trim(), anniversary_date: safeAnnivDate } : c
           ),
         }));
 
@@ -4592,19 +4694,19 @@ export default function App() {
               >
                 <div className="flex flex-col sm:flex-row gap-4">
                   {(mem.media_data_url || (mem.media_path && (mem.media_path.startsWith('data:image') || mem.media_path.startsWith('http')))) ? (
-                    <div className="w-full sm:w-48 h-40 shrink-0 border-2 border-[#4A3525] overflow-hidden bg-[#EFE2C6]">
+                    <div className="w-full sm:w-44 h-36 shrink-0 border-2 border-[#4A3525] overflow-hidden bg-[#EFE2C6] shadow-[2px_2px_0px_0px_#4A3525]">
                       <img
                         src={mem.media_data_url || mem.media_path}
                         alt={mem.title}
                         className="w-full h-full object-cover"
                       />
                     </div>
-                  ) : mem.media_path ? (
-                    <div className="sm:w-48 h-36 shrink-0 border-2 border-[#4A3525] bg-[#D8E6DC] flex flex-col items-center justify-center p-3 text-center">
-                      <ImageIcon className="w-7 h-7 text-[#4E6E5B] mb-1" />
-                      <span className="text-[10px] font-mono text-[#2C4235]">Media Tersimpan</span>
+                  ) : (
+                    <div className="w-full sm:w-28 h-24 sm:h-28 shrink-0 border-2 border-[#4A3525] bg-[#EADCC2] flex flex-col items-center justify-center p-2 text-center shadow-[2px_2px_0px_0px_#4A3525]">
+                      <span className="text-2xl sm:text-3xl mb-1 select-none">📷</span>
+                      <span className="text-[9px] font-mono font-bold text-[#5C4533] uppercase tracking-wider">Memori</span>
                     </div>
-                  ) : null}
+                  )}
 
                   <div className="flex-1 flex flex-col justify-between">
                     <div>
