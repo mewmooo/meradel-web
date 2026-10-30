@@ -788,16 +788,21 @@ export default function App() {
 
   // --- Inisialisasi Sesi Supabase Cloud & Recovery Listener ---
   useEffect(() => {
-    const checkRecoveryUrl = () => {
-      const hash = window.location.hash;
-      const search = window.location.search;
-      if (
+    const isRecoveryUrl = () => {
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+      return (
         hash.includes('type=recovery') ||
         search.includes('type=recovery') ||
-        hash.includes('access_token=')
-      ) {
+        hash.includes('access_token=') ||
+        search.includes('code=')
+      );
+    };
+
+    const checkRecoveryUrl = () => {
+      if (isRecoveryUrl()) {
         setAuthView('reset_password');
-        showToast('Sesi pemulihan akun terverifikasi. Silakan masukkan kata sandi barumu.', 'info');
+        showToast('Sesi pemulihan akun terverifikasi. Silakan buat kata sandi baru.', 'info');
       }
     };
 
@@ -805,26 +810,32 @@ export default function App() {
     window.addEventListener('hashchange', checkRecoveryUrl);
 
     if (supabase) {
-      // 1. Pulihkan sesi login aktif saat pertama kali dibuka
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session?.user) {
-          setCurrentUserId(session.user.id);
-          loadSupabaseData(session.user.id);
-        }
-      });
+      // 1. Pulihkan sesi login aktif saat pertama kali dibuka HANYA jika bukan mode recovery
+      if (!isRecoveryUrl()) {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          if (session?.user) {
+            setCurrentUserId(session.user.id);
+            loadSupabaseData(session.user.id);
+          }
+        });
+      }
 
       // 2. Listener event perubahan auth
       const {
         data: { subscription },
       } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user) {
-          setCurrentUserId(session.user.id);
-          loadSupabaseData(session.user.id);
-        } else if (event === 'SIGNED_OUT') {
-          setCurrentUserId(null);
-        } else if (event === 'PASSWORD_RECOVERY') {
+        if (event === 'PASSWORD_RECOVERY') {
           setAuthView('reset_password');
           showToast('Sesi pemulihan akun aktif dari email. Silakan atur kata sandi baru kamu.', 'info');
+        } else if (event === 'SIGNED_IN' && session?.user) {
+          if (isRecoveryUrl()) {
+            setAuthView('reset_password');
+          } else {
+            setCurrentUserId(session.user.id);
+            loadSupabaseData(session.user.id);
+          }
+        } else if (event === 'SIGNED_OUT') {
+          setCurrentUserId(null);
         }
       });
 
@@ -1072,19 +1083,16 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
-  // UI state for forgot‑password flow
-  const [showForgotModal, setShowForgotModal] = useState(false);
+  // UI state for forgot-password flow
   const [forgotEmail, setForgotEmail] = useState('');
-  const [isSendingReset, setIsSendingReset] = useState(false);
-  const [resetError, setResetError] = useState('');
-
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regGender, setRegGender] = useState('female');
   const [regAvatar, setRegAvatar] = useState('mage_rose');
 
-
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSendingResetEmail, setIsSendingResetEmail] = useState(false);
@@ -1360,8 +1368,10 @@ export default function App() {
     setIsSendingResetEmail(true);
     try {
       if (supabase) {
+        // Gunakan origin murni tanpa fragment sesuai standar Supabase Auth
+        const redirectUrl = window.location.origin;
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/#type=recovery`,
+          redirectTo: redirectUrl,
         });
         if (error) {
           showToast(error.message || 'Gagal mengirim email pemulihan.', 'error');
@@ -1424,14 +1434,23 @@ export default function App() {
         setLoginEmail(targetEmail);
       }
 
-      showToast('Kata sandi berhasil diperbarui! Silakan masuk dengan kata sandi barumu.', 'success');
+      // Bersihkan sesi pemulihan dan URL
+      if (supabase) {
+        try {
+          await supabase.auth.signOut();
+        } catch {
+          // ignore
+        }
+      }
+      setCurrentUserId(null);
       setResetNewPassword('');
       setResetConfirmPassword('');
       setForgotSent(false);
       setAuthView('login');
-      if (window.location.hash.includes('recovery')) {
+      if (window.location.hash || window.location.search) {
         window.history.replaceState(null, '', window.location.pathname);
       }
+      showToast('Kata sandi berhasil diperbarui! Silakan masuk dengan kata sandi barumu.', 'success');
     } catch {
       showToast('Gagal menyimpan kata sandi baru.', 'error');
     } finally {
@@ -3060,7 +3079,7 @@ export default function App() {
   // 12. HALAMAN PUBLIK: LOGIN, DAFTAR AKUN & RESET PASSWORD (TANPA SIMULATOR)
   // ============================================================================
 
-  if (!currentUser) {
+  if (!currentUser || authView === 'reset_password') {
     return (
       <div className="min-h-screen bg-[#F6EDD9] text-[#2C1E14] flex flex-col justify-between p-4">
         {renderToast()}
