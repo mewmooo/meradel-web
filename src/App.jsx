@@ -1084,9 +1084,7 @@ export default function App() {
   const [regGender, setRegGender] = useState('female');
   const [regAvatar, setRegAvatar] = useState('mage_rose');
 
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [resetNewPassword, setResetNewPassword] = useState('');
-  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSendingResetEmail, setIsSendingResetEmail] = useState(false);
