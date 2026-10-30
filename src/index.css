@@ -1,6 +1,99 @@
 @import "tailwindcss";
 
-/* Memastikan seluruh aset pixel art tetap tajam (crisp) */
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+}
+
+/* Tipografi Khusus Pixel Art Retro */
+.font-pixel {
+  font-family: 'Silkscreen', monospace, cursive;
+}
+
+/* Memastikan seluruh aset SVG pixel art tetap tajam (crisp) */
 svg {
   image-rendering: pixelated;
+}
+
+/* Efek Washi Tape / Selotip Estetik untuk Polaroid Kenangan */
+.washi-tape {
+  background: rgba(239, 226, 198, 0.85);
+  box-shadow: 0 1px 3px rgba(44, 30, 20, 0.15);
+  backdrop-filter: blur(2px);
+  position: relative;
+}
+.washi-tape::before,
+.washi-tape::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 2px,
+    rgba(140, 104, 76, 0.2) 2px,
+    rgba(140, 104, 76, 0.2) 4px
+  );
+}
+.washi-tape::before { left: -4px; }
+.washi-tape::after { right: -4px; }
+
+/* Animasi Melayang Halus (Floating) */
+@keyframes softFloat {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-soft-float {
+  animation: softFloat 3s ease-in-out infinite;
+}
+
+/* Animasi Detak Jantung Romantis */
+@keyframes heartPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  15% {
+    transform: scale(1.15);
+  }
+  30% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.1);
+  }
+}
+
+.animate-heart-pulse {
+  animation: heartPulse 2.4s ease-in-out infinite;
+}
+
+/* Efek Tombol Gameboy / Pixel Click */
+.pixel-btn-active:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0px 0px 0px 0px #2C1E14 !important;
+}
+
+/* Scrollbar Vintage */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F6EDD9;
+  border-left: 2px solid #2C1E14;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBB493;
+  border: 2px solid #2C1E14;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9E8163;
 }

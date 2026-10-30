@@ -158,6 +158,27 @@ function formatDateID(dateStr) {
   return dt.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function formatRemainingTime(targetIso) {
+  if (!targetIso) return '';
+  const now = new Date().getTime();
+  const target = new Date(targetIso).getTime();
+  const diffMs = target - now;
+  if (diffMs <= 0) return 'Siap dibuka sekarang';
+
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffHours / 24);
+  const remainingHours = diffHours % 24;
+  const remainingMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+  if (diffDays > 0) {
+    return `${diffDays} hari ${remainingHours > 0 ? `${remainingHours} jam` : ''}`;
+  }
+  if (diffHours > 0) {
+    return `${diffHours} jam ${remainingMinutes > 0 ? `${remainingMinutes} mnt` : ''}`;
+  }
+  return `${Math.max(1, remainingMinutes)} menit lagi`;
+}
+
 function hashText(rawText) {
   const normalized = (rawText || '').trim();
   let h1 = 0xdeadbeef ^ normalized.length;
@@ -4674,123 +4695,155 @@ export default function App() {
 
   const renderMemoriesPage = () => (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-[#4A3525]/30">
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <BookOpen className="w-5 h-5 text-[#8C684C]" />
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2 font-pixel text-[#2C1E14]">
+            <BookOpen className="w-6 h-6 text-[#8C684C]" />
             Timeline Memories
           </h1>
-          <p className="text-xs text-[#6E5039]">
-            Simpan foto dan cerita momen berharga kalian. Kenangan berstatus Shared juga dapat menjadi bahan kuis AI!
+          <p className="text-xs text-[#6E5039] mt-1">
+            Abadikan lembaran polaroid & momen berharga kalian berdua. Kenangan bersama juga otomatis memperkaya kuis AI!
           </p>
         </div>
-        <PixelButton variant="pink" onClick={() => setShowMemModal(true)}>
-          <Plus className="w-4 h-4" /> + Simpan Memory Baru
+        <PixelButton variant="pink" onClick={() => setShowMemModal(true)} className="shadow-[3px_3px_0px_#2C1E14]">
+          <Plus className="w-4 h-4" /> Simpan Memory Baru
         </PixelButton>
       </div>
 
       {authorizedMemories.length === 0 ? (
-        <PixelCard className="text-center py-10">
-          <p className="font-bold text-base">Belum ada kenangan di sini.</p>
-          <p className="text-xs text-[#6E5039] mt-1 mb-4">
-            Simpan momen pertama kalian, baik dengan foto maupun cerita singkat.
+        <PixelCard className="text-center py-12 bg-[#FDF8EE] relative overflow-hidden">
+          <div className="w-16 h-16 mx-auto mb-3 bg-[#EFE2C6] border-2 border-[#4A3525] flex items-center justify-center text-3xl shadow-[3px_3px_0px_#4A3525] animate-soft-float">
+            📖
+          </div>
+          <p className="font-bold text-base text-[#2C1E14] font-pixel">Buku Kenangan Masih Kosong</p>
+          <p className="text-xs text-[#6E5039] mt-1.5 mb-5 max-w-sm mx-auto leading-relaxed">
+            Yuk, abadikan momen manis pertama kalian! Kamu bisa mengunggah foto kencan, cerita lucu, atau impian bersama.
           </p>
           <PixelButton variant="pink" onClick={() => setShowMemModal(true)} className="mx-auto">
-            <Plus className="w-4 h-4" /> Tambah Memory Pertama
+            <Plus className="w-4 h-4" /> Buat Memory Pertama
           </PixelButton>
         </PixelCard>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {authorizedMemories.map((mem) => {
             const creatorName =
               db.profiles.find((p) => p.id === mem.created_by)?.display_name || 'Pasangan';
-            return (
-              <PixelCard
-                key={mem.id}
-                variant={mem.visibility === 'private' ? 'warm' : 'cream'}
-              >
-                <div className="flex flex-col sm:flex-row gap-4">
-                  {(mem.media_data_url || (mem.media_path && (mem.media_path.startsWith('data:image') || mem.media_path.startsWith('http')))) ? (
-                    <div className="w-full sm:w-44 h-36 shrink-0 border-2 border-[#4A3525] overflow-hidden bg-[#EFE2C6] shadow-[2px_2px_0px_0px_#4A3525]">
-                      <img
-                        src={mem.media_data_url || mem.media_path}
-                        alt={mem.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  ) : (
-                    <div className="w-full sm:w-28 h-24 sm:h-28 shrink-0 border-2 border-[#4A3525] bg-[#EADCC2] flex flex-col items-center justify-center p-2 text-center shadow-[2px_2px_0px_0px_#4A3525]">
-                      <span className="text-2xl sm:text-3xl mb-1 select-none">📷</span>
-                      <span className="text-[9px] font-mono font-bold text-[#5C4533] uppercase tracking-wider">Memori</span>
-                    </div>
-                  )}
+            const hasMedia = Boolean(
+              mem.media_data_url ||
+              (mem.media_path && (mem.media_path.startsWith('data:image') || mem.media_path.startsWith('http') || mem.media_path.startsWith('blob:')))
+            );
+            const mediaSrc = mem.media_data_url || mem.media_path;
 
-                  <div className="flex-1 flex flex-col justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                        <span className="text-xs font-bold text-[#8C684C]">
-                          📅 {formatDateID(mem.memory_date)}
+            return (
+              <div
+                key={mem.id}
+                className="group relative bg-[#FDF8EE] border-2 border-[#4A3525] p-3 sm:p-4 shadow-[4px_4px_0px_#4A3525] hover:-translate-y-1 hover:shadow-[6px_6px_0px_#4A3525] transition-all duration-200 flex flex-col justify-between"
+              >
+                {/* Washi Tape Hiasan Polaroid */}
+                <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 w-20 h-5 washi-tape border border-[#4A3525]/30 rotate-[-1.5deg] z-10 pointer-events-none" />
+
+                <div>
+                  {/* Polaroid Frame */}
+                  <div className="relative border-2 border-[#4A3525] bg-[#EFE2C6] overflow-hidden mb-3 shadow-[2px_2px_0px_#4A3525]">
+                    {hasMedia ? (
+                      <div className="w-full h-48 sm:h-52 overflow-hidden bg-black/5">
+                        <img
+                          src={mediaSrc}
+                          alt={mem.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-full h-36 sm:h-40 flex flex-col items-center justify-center p-3 text-center bg-gradient-to-b from-[#F6EDD9] to-[#EADCC2]">
+                        <div className="w-12 h-12 rounded-none bg-[#FDF8EE] border-2 border-[#4A3525] flex items-center justify-center text-2xl shadow-[2px_2px_0px_#4A3525] mb-2">
+                          📸
+                        </div>
+                        <span className="text-[11px] font-pixel text-[#5C4533] uppercase tracking-wider">
+                          Kenangan Manis
                         </span>
-                        <span
-                          className={`text-[11px] font-bold px-2 py-0.5 border border-[#4A3525] flex items-center gap-1 ${
-                            mem.visibility === 'private'
-                              ? 'bg-[#4A3525] text-[#FDF8EE]'
-                              : 'bg-[#D8E6DC] text-[#2C4235]'
-                          }`}
-                        >
-                          {mem.visibility === 'private' ? (
-                            <>
-                              <Lock className="w-3 h-3" /> Privat (Hanya {creatorName})
-                            </>
-                          ) : (
-                            <>
-                              <Users className="w-3 h-3" /> Shared Memory
-                            </>
-                          )}
+                        <span className="text-[10px] text-[#6E5039] italic mt-0.5">
+                          Tersimpan abadi di Meradel
                         </span>
                       </div>
-                      <h3 className="text-base font-bold text-[#2C1E14]">{mem.title}</h3>
-                      {mem.caption && (
-                        <p className="text-xs text-[#4A3525] mt-1.5 leading-relaxed">
-                          {mem.caption}
-                        </p>
-                      )}
-                    </div>
+                    )}
 
-                    <div className="mt-4 pt-2 border-t border-[#8C684C]/30 flex items-center justify-between text-xs">
-                      <span className="text-[#6E5039]">Ditulis oleh {creatorName}</span>
-                      {mem.created_by === currentUserId && (
-                        <button
-                          onClick={() =>
-                            setConfirmDialog({
-                              title: 'Hapus Kenangan?',
-                              message: `Hapus kenangan "${mem.title}"?`,
-                              onConfirm: async () => {
-                                if (supabase) {
-                                  try {
-                                    await supabase.from('memories').delete().eq('id', mem.id);
-                                  } catch (err) {
-                                    console.warn('Gagal hapus memory di Supabase:', err);
-                                  }
-                                }
-                                setDb((prev) => ({
-                                  ...prev,
-                                  memories: prev.memories.filter((m) => m.id !== mem.id),
-                                }));
-                                setConfirmDialog(null);
-                                showToast('Kenangan dihapus.', 'info');
-                              },
-                            })
-                          }
-                          className="text-[#C95B5B] font-bold flex items-center gap-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" /> Hapus
-                        </button>
-                      )}
+                    {/* Status Visibility Badge */}
+                    <div className="absolute top-2 right-2">
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 border border-[#4A3525] shadow-[1px_1px_0px_#2C1E14] flex items-center gap-1 ${
+                          mem.visibility === 'private'
+                            ? 'bg-[#4A3525] text-[#FDF8EE]'
+                            : 'bg-[#D8E6DC] text-[#2C4235]'
+                        }`}
+                      >
+                        {mem.visibility === 'private' ? (
+                          <>
+                            <Lock className="w-3 h-3" /> Privat
+                          </>
+                        ) : (
+                          <>
+                            <Users className="w-3 h-3" /> Bersama
+                          </>
+                        )}
+                      </span>
                     </div>
                   </div>
+
+                  {/* Header Kenangan: Tanggal & Judul */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#8C684C]">
+                      <span>📅</span>
+                      <span>{formatDateID(mem.memory_date)}</span>
+                    </div>
+
+                    <h3 className="text-base font-bold text-[#2C1E14] leading-snug group-hover:text-[#8C4F5E] transition-colors">
+                      {mem.title}
+                    </h3>
+
+                    {mem.caption && (
+                      <p className="text-xs text-[#5C4533] leading-relaxed bg-[#F6EDD9]/60 p-2.5 border border-[#4A3525]/20 italic mt-2 whitespace-pre-line">
+                        &ldquo;{mem.caption}&rdquo;
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </PixelCard>
+
+                {/* Footer Kenangan */}
+                <div className="mt-4 pt-2.5 border-t border-[#8C684C]/30 flex items-center justify-between text-xs">
+                  <span className="text-[11px] text-[#6E5039] flex items-center gap-1">
+                    <Heart className="w-3 h-3 text-[#D98A9C] fill-[#D98A9C]" />
+                    Oleh <strong className="text-[#2C1E14]">{creatorName}</strong>
+                  </span>
+                  {mem.created_by === currentUserId && (
+                    <button
+                      onClick={() =>
+                        setConfirmDialog({
+                          title: 'Hapus Kenangan?',
+                          message: `Apakah kamu yakin ingin menghapus kenangan "${mem.title}"?`,
+                          onConfirm: async () => {
+                            if (supabase) {
+                              try {
+                                await supabase.from('memories').delete().eq('id', mem.id);
+                              } catch (err) {
+                                console.warn('Gagal hapus memory di Supabase:', err);
+                              }
+                            }
+                            setDb((prev) => ({
+                              ...prev,
+                              memories: prev.memories.filter((m) => m.id !== mem.id),
+                            }));
+                            setConfirmDialog(null);
+                            showToast('Kenangan berhasil dihapus.', 'info');
+                          },
+                        })
+                      }
+                      className="text-[#C95B5B] hover:text-[#9E3F3F] font-bold text-[11px] flex items-center gap-1 p-1 hover:bg-[#F5DCE2] border border-transparent hover:border-[#C95B5B] transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Hapus
+                    </button>
+                  )}
+                </div>
+              </div>
             );
           })}
         </div>
@@ -4885,32 +4938,35 @@ export default function App() {
 
   const renderLoveNotesPage = () => (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-[#4A3525]/30">
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <Mail className="w-5 h-5 text-[#4E6E5B]" />
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2 font-pixel text-[#2C1E14]">
+            <Mail className="w-6 h-6 text-[#4E6E5B]" />
             Love Notes & Kapsul Waktu
           </h1>
-          <p className="text-xs text-[#6E5039]">
-            Kirim surat langsung atau pilih tanggal buka di masa depan. Surat terjadwal dikunci hingga waktunya tiba.
+          <p className="text-xs text-[#6E5039] mt-1">
+            Kirim surat cinta langsung atau kunci sebagai kapsul waktu kejutan untuk dibuka di masa depan 💌
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <PixelButton
             variant={noteTab === 'inbox' ? 'primary' : 'secondary'}
             onClick={() => setNoteTab('inbox')}
+            className="text-xs"
           >
             Kotak Masuk ({authorizedLoveNotes.inbox.length})
           </PixelButton>
           <PixelButton
             variant={noteTab === 'sent' ? 'primary' : 'secondary'}
             onClick={() => setNoteTab('sent')}
+            className="text-xs"
           >
             Terkirim ({authorizedLoveNotes.sent.length})
           </PixelButton>
           <PixelButton
             variant={noteTab === 'write' ? 'pink' : 'secondary'}
             onClick={() => setNoteTab('write')}
+            className="text-xs"
           >
             <Plus className="w-4 h-4" /> Tulis Surat
           </PixelButton>
@@ -4918,119 +4974,214 @@ export default function App() {
       </div>
 
       {noteTab === 'write' ? (
-        <PixelCard className="max-w-xl mx-auto">
-          <h2 className="font-bold text-base mb-3">
-            Tulis Surat untuk {partnerProfile ? partnerProfile.display_name : 'Pasanganmu'}
-          </h2>
+        <PixelCard className="max-w-xl mx-auto bg-[#FDF8EE] border-2 border-[#4A3525] shadow-[6px_6px_0px_#4A3525]">
+          <div className="flex items-center gap-2 pb-3 mb-4 border-b-2 border-[#4A3525]/30">
+            <span className="text-2xl">✍️</span>
+            <div>
+              <h2 className="font-bold text-base font-pixel text-[#2C1E14]">
+                Tulis Surat Romantis
+              </h2>
+              <p className="text-[11px] text-[#6E5039]">
+                Untuk {partnerProfile ? partnerProfile.display_name : 'Pasanganmu'} tersayang
+              </p>
+            </div>
+          </div>
+
           <form onSubmit={handleSendLoveNote} className="space-y-4 text-xs">
             <div>
-              <label className="block font-bold uppercase mb-1">Judul Surat *</label>
+              <label className="block font-bold uppercase tracking-wider text-[#4A3525] mb-1">
+                Judul Surat *
+              </label>
               <input
                 type="text"
                 required
                 value={noteTitle}
                 onChange={(e) => setNoteTitle(e.target.value)}
-                placeholder="Contoh: Untuk dibaca saat kamu butuh semangat"
-                className="w-full px-3 py-2 bg-white border-2 border-[#4A3525]"
+                placeholder="Contoh: Kejutan saat anniversary kita / Buka saat kamu lelah..."
+                className="w-full px-3 py-2.5 bg-white border-2 border-[#4A3525] text-sm focus:outline-none"
               />
             </div>
+
             <div>
-              <label className="block font-bold uppercase mb-1">Isi Surat *</label>
+              <label className="block font-bold uppercase tracking-wider text-[#4A3525] mb-1">
+                Isi Surat Manis *
+              </label>
               <textarea
-                rows={5}
+                rows={6}
                 required
                 value={noteBody}
                 onChange={(e) => setNoteBody(e.target.value)}
-                placeholder="Tuliskan pesan hangatmu di sini..."
-                className="w-full p-3 bg-white border-2 border-[#4A3525]"
+                placeholder="Tuliskan isi hatimu, ucapan terima kasih, atau rahasia manis untuknya..."
+                className="w-full p-3 bg-white border-2 border-[#4A3525] text-sm leading-relaxed focus:outline-none"
               />
             </div>
-            <div>
-              <label className="block font-bold uppercase mb-1">
-                Jadwalkan Waktu Buka (Opsional)
+
+            <div className="p-3 bg-[#F6EDD9] border-2 border-[#4A3525]/40 space-y-2">
+              <label className="block font-bold uppercase tracking-wider text-[#4A3525]">
+                🔒 Kunci Sebagai Kapsul Waktu (Opsional)
               </label>
+              <p className="text-[11px] text-[#6E5039] leading-relaxed">
+                Jika diisi, surat akan tetap muncul di kotak masuk pasanganmu dengan segel gembok dan hanya bisa dibuka setelah tanggal & jam yang ditentukan tiba!
+              </p>
               <input
                 type="datetime-local"
                 value={noteScheduleDate}
                 onChange={(e) => setNoteScheduleDate(e.target.value)}
-                className="w-full px-3 py-2 bg-white border-2 border-[#4A3525]"
+                className="w-full px-3 py-2 bg-white border-2 border-[#4A3525] text-xs focus:outline-none"
               />
             </div>
-            <PixelButton type="submit" variant="pink" className="w-full">
-              <Mail className="w-4 h-4" /> Kirim Love Note
+
+            <PixelButton type="submit" variant="pink" className="w-full text-sm font-bold shadow-[3px_3px_0px_#2C1E14]">
+              <Mail className="w-4 h-4" /> Segel & Kirimkan Surat
             </PixelButton>
           </form>
         </PixelCard>
       ) : (
-        <div className="grid md:grid-cols-2 gap-4">
-          {(noteTab === 'inbox' ? authorizedLoveNotes.inbox : authorizedLoveNotes.sent).map(
-            (note) => {
-              const isInbox = noteTab === 'inbox';
-              return (
-                <PixelCard
-                  key={note.id}
-                  variant={note.isLocked ? 'warm' : 'cream'}
-                  className="flex flex-col justify-between"
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="text-[11px] font-bold px-2 py-0.5 bg-[#EFE2C6] border border-[#4A3525]">
-                        {isInbox
-                          ? `Dari: ${partnerProfile?.display_name || 'Pasangan'}`
-                          : `Untuk: ${partnerProfile?.display_name || 'Pasangan'}`}
-                      </span>
-                      {note.isLocked ? (
-                        <span className="text-[11px] font-bold px-2 py-0.5 bg-[#4A3525] text-[#FDF8EE] flex items-center gap-1">
-                          <Lock className="w-3 h-3" /> Terkunci s/d {formatDateID(note.open_at)}
+        <div className="space-y-4">
+          {(noteTab === 'inbox' ? authorizedLoveNotes.inbox : authorizedLoveNotes.sent).length === 0 ? (
+            <PixelCard className="text-center py-12 bg-[#FDF8EE]">
+              <div className="text-4xl mb-2 animate-soft-float">📭</div>
+              <p className="font-bold text-base font-pixel text-[#2C1E14]">Kotak Surat Kosong</p>
+              <p className="text-xs text-[#6E5039] mt-1 mb-4">
+                {noteTab === 'inbox'
+                  ? 'Belum ada surat masuk dari pasanganmu. Kamu bisa mulai menulis duluan!'
+                  : 'Kamu belum pernah mengirim surat cinta ke pasanganmu.'}
+              </p>
+              <PixelButton variant="pink" onClick={() => setNoteTab('write')} className="mx-auto">
+                <Plus className="w-4 h-4" /> Tulis Surat Sekarang
+              </PixelButton>
+            </PixelCard>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(noteTab === 'inbox' ? authorizedLoveNotes.inbox : authorizedLoveNotes.sent).map((note) => {
+                const isInbox = noteTab === 'inbox';
+                const remaining = note.isLocked ? formatRemainingTime(note.open_at) : '';
+
+                return (
+                  <div
+                    key={note.id}
+                    className={`relative border-2 border-[#4A3525] p-4 shadow-[4px_4px_0px_#4A3525] flex flex-col justify-between transition-all duration-200 hover:-translate-y-0.5 ${
+                      note.isLocked
+                        ? 'bg-[#F3E8D3] border-dashed border-[#8C684C]'
+                        : 'bg-[#FDF8EE]'
+                    }`}
+                  >
+                    <div>
+                      {/* Header Surat */}
+                      <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-[#4A3525]/20">
+                        <span className="text-[11px] font-bold px-2 py-0.5 bg-[#EFE2C6] border border-[#4A3525] text-[#4A3525]">
+                          {isInbox
+                            ? `Dari: ${partnerProfile?.display_name || 'Pasangan'}`
+                            : `Untuk: ${partnerProfile?.display_name || 'Pasangan'}`}
                         </span>
-                      ) : (
-                        <span className="text-[11px] font-bold px-2 py-0.5 bg-[#D8E6DC] text-[#2C4235] flex items-center gap-1">
-                          <Unlock className="w-3 h-3" /> {note.opened_at ? 'Sudah Dibaca' : 'Siap Dibuka'}
-                        </span>
-                      )}
+
+                        {note.isLocked ? (
+                          <span className="text-[10px] font-bold px-2.5 py-0.5 bg-[#4A3525] text-[#FDF8EE] flex items-center gap-1.5 shadow-[1px_1px_0px_#2C1E14]">
+                            <Lock className="w-3 h-3 text-[#E8B84B]" />
+                            <span>Terkunci {remaining ? `(${remaining})` : ''}</span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-2 py-0.5 bg-[#D8E6DC] text-[#2C4235] border border-[#4E6E5B] flex items-center gap-1">
+                            <Unlock className="w-3 h-3 text-[#4E6E5B]" />
+                            <span>{note.opened_at ? 'Sudah Dibaca' : 'Siap Dibuka ✨'}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Judul & Teks Surat */}
+                      <div className="mt-2">
+                        <h3 className="font-bold text-base text-[#2C1E14] flex items-center gap-1.5">
+                          {note.isLocked ? <span>🔐</span> : <span>💌</span>}
+                          <span>{note.title}</span>
+                        </h3>
+
+                        {note.isLocked ? (
+                          <div className="mt-3 p-3 bg-[#EAE0CA] border border-[#8C684C]/40 text-xs text-[#6E5039] rounded-none flex items-center gap-2 italic">
+                            <span className="text-xl shrink-0 animate-heart-pulse">⏳</span>
+                            <span className="leading-relaxed">
+                              {isInbox
+                                ? 'Surat rahasia ini sedang menunggu waktu untuk terbuka. Bersabarlah, ada kejutan manis untukmu!'
+                                : `Surat ini terkunci bagi pasanganmu sampai: ${formatDateID(note.open_at)}.`}
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-[#5C4533] mt-2 line-clamp-3 italic leading-relaxed bg-[#F6EDD9]/50 p-2 border border-[#4A3525]/15">
+                            &ldquo;{note.body}&rdquo;
+                          </p>
+                        )}
+                      </div>
                     </div>
 
-                    <h3 className="font-bold text-base text-[#2C1E14]">{note.title}</h3>
-                    <p className="text-xs text-[#6E5039] mt-2 line-clamp-3 italic">{note.body}</p>
+                    {/* Footer Surat */}
+                    <div className="mt-4 pt-3 border-t border-[#8C684C]/30 flex items-center justify-between text-xs">
+                      <span className="text-[11px] text-[#6E5039]">
+                        Dikirim: {formatDateID(note.created_at)}
+                      </span>
+                      <PixelButton
+                        variant={note.isLocked && isInbox ? 'secondary' : 'primary'}
+                        disabled={note.isLocked && isInbox}
+                        onClick={() => handleOpenLoveNote(note)}
+                        className="text-xs py-1.5 px-3"
+                      >
+                        {note.isLocked && isInbox ? (
+                          <>
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>Belum Waktunya</span>
+                          </>
+                        ) : (
+                          <>
+                            <Mail className="w-3.5 h-3.5" />
+                            <span>Buka Surat</span>
+                          </>
+                        )}
+                      </PixelButton>
+                    </div>
                   </div>
-
-                  <div className="mt-4 pt-3 border-t border-[#8C684C]/30 flex items-center justify-between text-xs">
-                    <span className="text-[11px] text-[#6E5039]">
-                      Dikirim {formatDateID(note.created_at)}
-                    </span>
-                    <PixelButton
-                      variant={note.isLocked && isInbox ? 'secondary' : 'primary'}
-                      onClick={() => handleOpenLoveNote(note)}
-                    >
-                      {note.isLocked && isInbox ? 'Belum Waktunya' : 'Baca Surat'}
-                    </PixelButton>
-                  </div>
-                </PixelCard>
-              );
-            }
+                );
+              })}
+            </div>
           )}
         </div>
       )}
 
+      {/* Modal Membaca Surat Cantik Bergaya Kertas Surat Romantis */}
       {selectedNoteToRead && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <PixelCard variant="warm" className="w-full max-w-md">
-            <div className="flex items-center justify-between mb-3 pb-2 border-b-2 border-[#4A3525]">
-              <h3 className="font-bold text-base">{selectedNoteToRead.title}</h3>
-              <button onClick={() => setSelectedNoteToRead(null)}>
-                <X className="w-5 h-5" />
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-[#FFFDF7] border-4 border-[#4A3525] shadow-[8px_8px_0px_#2C1E14] p-5 sm:p-6 relative animate-soft-float">
+            {/* Header Surat Vintage */}
+            <div className="flex items-center justify-between pb-3 mb-4 border-b-2 border-[#4A3525]">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">💌</span>
+                <div>
+                  <h3 className="font-bold text-base font-pixel text-[#2C1E14]">
+                    {selectedNoteToRead.title}
+                  </h3>
+                  <p className="text-[10px] text-[#6E5039]">
+                    Kapsul Waktu Cinta — Meradel
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedNoteToRead(null)}
+                className="p-1 hover:bg-[#EFE2C6] border border-[#4A3525] transition"
+              >
+                <X className="w-5 h-5 text-[#4A3525]" />
               </button>
             </div>
-            <div className="p-4 bg-[#FDF8EE] border-2 border-[#4A3525] text-sm leading-relaxed whitespace-pre-line text-[#2C1E14]">
+
+            {/* Isi Kertas Surat */}
+            <div className="p-4 sm:p-5 bg-[#FBF6EA] border-2 border-[#8C684C]/40 text-sm leading-relaxed whitespace-pre-line text-[#2C1E14] shadow-inner font-serif min-h-[160px] max-h-[60vh] overflow-y-auto">
               {selectedNoteToRead.body}
             </div>
-            <div className="mt-3 flex items-center justify-between text-xs text-[#6E5039]">
-              <span>Dikirim: {formatDateID(selectedNoteToRead.created_at)}</span>
+
+            {/* Footer Surat */}
+            <div className="mt-4 pt-3 border-t border-[#8C684C]/30 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6E5039]">
+              <span>📅 Dikirim pada {formatDateID(selectedNoteToRead.created_at)}</span>
               <PixelButton variant="primary" onClick={() => setSelectedNoteToRead(null)}>
-                Tutup Surat
+                Simpan & Tutup Surat
               </PixelButton>
             </div>
-          </PixelCard>
+          </div>
         </div>
       )}
     </div>
@@ -5609,39 +5760,57 @@ export default function App() {
       {renderConfirmDialog()}
 
       <div className="flex-1 flex max-w-6xl w-full mx-auto">
-        <aside className="hidden md:flex flex-col w-60 shrink-0 border-r-2 border-[#4A3525] bg-[#FDF8EE] p-4 justify-between">
+        <aside className="hidden md:flex flex-col w-64 shrink-0 border-r-2 border-[#4A3525] bg-[#FDF8EE] p-4 justify-between shadow-[2px_0px_0px_#4A3525]/10">
           <div className="space-y-6">
+            {/* Kartu Profil Pasangan di Sidebar */}
             <div
               onClick={() => setActiveRoute('home')}
-              className="flex items-center gap-3 p-2 border-2 border-[#4A3525] bg-[#F6EDD9] cursor-pointer"
+              className="flex items-center gap-3 p-2.5 border-2 border-[#4A3525] bg-[#F6EDD9] shadow-[3px_3px_0px_#4A3525] cursor-pointer hover:-translate-y-0.5 transition"
             >
-              <PixelAvatar avatarKey={currentUser.avatar_key} size={40} />
-              <div className="overflow-hidden">
-                <p className="font-extrabold text-sm tracking-tight truncate">MERADEL</p>
-                <p className="text-[11px] text-[#6E5039] truncate">{currentUser.display_name}</p>
+              <div className="relative flex items-center -space-x-2">
+                <PixelAvatar avatarKey={currentUser.avatar_key} size={36} />
+                {partnerProfile && (
+                  <PixelAvatar avatarKey={partnerProfile.avatar_key} size={36} />
+                )}
+                <div className="absolute -bottom-1 -right-1 bg-white p-0.5 rounded-none border border-[#4A3525]">
+                  <Heart className="w-3 h-3 text-[#D98A9C] fill-[#D98A9C] animate-heart-pulse" />
+                </div>
+              </div>
+
+              <div className="overflow-hidden min-w-0 flex-1">
+                <p className="font-pixel text-xs tracking-wider text-[#2C1E14] truncate">
+                  MERADEL
+                </p>
+                <p className="text-[11px] font-bold text-[#8C684C] truncate mt-0.5">
+                  {currentCouple.name}
+                </p>
+                <p className="text-[10px] text-[#6E5039] truncate">
+                  {currentUser.display_name} {partnerProfile ? `& ${partnerProfile.display_name}` : ''}
+                </p>
               </div>
             </div>
 
+            {/* Menu Navigasi Utama */}
             <nav className="space-y-1.5">
               {desktopSidebarItems.map((item) => (
                 <button
                   key={item.id}
                   onClick={() => setActiveRoute(item.id)}
-                  className={`w-full px-3 py-2.5 border-2 text-left text-xs font-bold flex items-center gap-3 transition ${
+                  className={`w-full px-3 py-2.5 border-2 text-left text-xs font-bold flex items-center gap-3 transition-all duration-150 ${
                     activeRoute === item.id
-                      ? 'bg-[#6B8E78] text-[#FDF8EE] border-[#2C1E14] shadow-[3px_3px_0px_0px_#2C1E14]'
-                      : 'bg-transparent text-[#4A3525] border-transparent hover:bg-[#EFE2C6]'
+                      ? 'bg-[#6B8E78] text-[#FDF8EE] border-[#2C1E14] shadow-[3px_3px_0px_0px_#2C1E14] translate-x-1'
+                      : 'bg-transparent text-[#4A3525] border-transparent hover:bg-[#EFE2C6] hover:border-[#4A3525]/30'
                   }`}
                 >
-                  {item.icon}
-                  <span>{item.label}</span>
+                  <span className={activeRoute === item.id ? 'animate-soft-float' : ''}>{item.icon}</span>
+                  <span className="tracking-wide">{item.label}</span>
                 </button>
               ))}
             </nav>
           </div>
 
           <div className="pt-4 border-t-2 border-[#EFE2C6]">
-            <PixelButton variant="secondary" onClick={handleLogout} className="w-full">
+            <PixelButton variant="secondary" onClick={handleLogout} className="w-full text-xs">
               <LogOut className="w-4 h-4" /> Keluar Akun
             </PixelButton>
           </div>
@@ -5653,16 +5822,21 @@ export default function App() {
               onClick={() => setActiveRoute('home')}
               className="flex items-center gap-2 cursor-pointer"
             >
-              <PixelAvatar avatarKey={currentUser.avatar_key} size={34} />
+              <div className="flex items-center -space-x-1">
+                <PixelAvatar avatarKey={currentUser.avatar_key} size={32} />
+                {partnerProfile && (
+                  <PixelAvatar avatarKey={partnerProfile.avatar_key} size={32} />
+                )}
+              </div>
               <div>
-                <span className="font-extrabold text-sm block leading-none">MERADEL</span>
-                <span className="text-[10px] text-[#6E5039]">{currentCouple.name}</span>
+                <span className="font-pixel text-xs block text-[#2C1E14] leading-none">MERADEL</span>
+                <span className="text-[10px] text-[#6E5039] font-bold">{currentCouple.name}</span>
               </div>
             </div>
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setActiveRoute('wishlist')}
-                className={`p-2 border-2 border-[#4A3525] ${
+                className={`p-2 border-2 border-[#4A3525] shadow-[2px_2px_0px_#2C1E14] active:translate-x-0.5 active:translate-y-0.5 transition ${
                   activeRoute === 'wishlist' ? 'bg-[#D98A9C] text-white' : 'bg-[#FDF8EE]'
                 }`}
                 title="Wishlist"
@@ -5671,7 +5845,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveRoute('love-notes')}
-                className={`p-2 border-2 border-[#4A3525] ${
+                className={`p-2 border-2 border-[#4A3525] shadow-[2px_2px_0px_#2C1E14] active:translate-x-0.5 active:translate-y-0.5 transition ${
                   activeRoute === 'love-notes' ? 'bg-[#6B8E78] text-white' : 'bg-[#FDF8EE]'
                 }`}
                 title="Love Notes"
@@ -5680,7 +5854,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveRoute('settings')}
-                className={`p-2 border-2 border-[#4A3525] ${
+                className={`p-2 border-2 border-[#4A3525] shadow-[2px_2px_0px_#2C1E14] active:translate-x-0.5 active:translate-y-0.5 transition ${
                   activeRoute === 'settings' ? 'bg-[#4A3525] text-white' : 'bg-[#FDF8EE]'
                 }`}
                 title="Settings"
